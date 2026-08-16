@@ -9,7 +9,7 @@ separate treatment.
 from decimal import Decimal
 
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.errors import APIError, not_found
@@ -20,23 +20,54 @@ from app.models import FinancialRecord, ImportBatch
 from app.schemas import BUSINESS_FIELDS
 
 
-def existing_references(
-    session: Session, batch_id: str, exclude_record_id: str | None = None
-) -> frozenset[str]:
-    """References already used in this batch.
+def references_before(session: Session, batch_id: str, sequence: int) -> frozenset[str]:
+    """References used EARLIER in this batch than the given arrival position.
 
-    `exclude_record_id` is not an optimisation, it is a correctness
-    requirement: without it, revalidating any record would find its own
-    reference and flag it DUPLICATE_REFERENCE against itself -- making
-    correction impossible.
+    The policy is "the first occurrence wins", and it must give the same answer
+    every time it is evaluated. Two properties make that true:
+
+    - looking only at records BEFORE this one excludes the record itself, so a
+      record can never be flagged a duplicate of itself;
+    - looking at arrival ORDER rather than at "every other record" means the
+      first of two duplicates stays VALID when revalidated. Comparing against
+      all siblings would flip it to NEEDS_REVIEW with no correction having
+      happened -- the same data changing verdict on re-read.
+
+    Ordering comes from import_sequence, never from the UUID primary key, which
+    carries no order at all.
     """
     query = select(FinancialRecord.reference).where(
         FinancialRecord.batch_id == batch_id,
+        FinancialRecord.import_sequence < sequence,
         FinancialRecord.reference.is_not(None),
     )
-    if exclude_record_id is not None:
-        query = query.where(FinancialRecord.id != exclude_record_id)
-    return frozenset(r for r in session.scalars(query) if r)
+    return frozenset(reference for reference in session.scalars(query) if reference)
+
+
+def next_import_sequence(session: Session, batch_id: str) -> int:
+    """Arrival position for the next record of this batch.
+
+    Continuing across uploads is what makes uniqueness batch-scoped rather than
+    file-scoped: a reference already imported by an earlier file is visible to
+    a later one.
+
+    KNOWN LIMITATION -- not concurrency-safe. This reads MAX and adds one, so
+    two imports running at the same time on the same batch can both read the
+    same maximum and allocate the same position. Those rows would then never see
+    each other as earlier, and a duplicate between them would go unreported.
+
+    This is the same window as the reference race already documented: both come
+    from read-then-write outside a lock. Sequential imports -- the only mode
+    exercised here -- are unaffected. Production would use an atomic counter on
+    import_batch, or a UNIQUE (batch_id, import_sequence) constraint with retry
+    on conflict.
+    """
+    highest = session.scalar(
+        select(func.max(FinancialRecord.import_sequence)).where(
+            FinancialRecord.batch_id == batch_id
+        )
+    )
+    return 0 if highest is None else highest + 1
 
 
 def revalidate(
@@ -87,7 +118,7 @@ def get_record(session: Session, record_id: str, tenant_id: str) -> FinancialRec
 def revalidate_record(
     session: Session, record: FinancialRecord, confidence_threshold: Decimal
 ) -> FinancialRecord:
-    references = existing_references(session, record.batch_id, exclude_record_id=record.id)
+    references = references_before(session, record.batch_id, record.import_sequence)
     revalidate(record, references, confidence_threshold)
     session.commit()
     session.refresh(record)

@@ -26,9 +26,14 @@ def current_tenant(session: SessionDep) -> Tenant:
     """PROVISIONAL: resolves the default tenant.
 
     Replaced at the authentication stage by tenant resolution from the JWT.
-    The contract does not change: callers receive a Tenant, and every query is
-    scoped by it. The tenant id will then come from the token and never from the
-    request.
+    The contract does not change: callers receive a Tenant, and the tenant id
+    will then come from the token, never from the request.
+
+    Scope of the guarantee: declaring this dependency on a router guarantees the
+    tenant is RESOLVED for every route it holds. It does NOT guarantee that each
+    SQL query filters on it -- that remains the query author's responsibility,
+    and it is the parametrised cross-tenant matrix in the test suite that guards
+    against a route being added without scoping.
     """
     tenant = session.scalar(select(Tenant).where(Tenant.name == DEFAULT_TENANT_NAME))
     if tenant is None:

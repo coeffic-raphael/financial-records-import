@@ -50,7 +50,33 @@ If a need appeared to aggregate *"every record carrying `NET_AMOUNT_MISMATCH`"*
 across batches, the normalised table would become the right choice. That need
 does not exist here — the batch summary counts by **status**, not by error code.
 
-### 2.3 Trap: `reference` has NO uniqueness constraint in the schema
+### 2.3 The governing rule: strict on what we control, permissive on what the user supplies
+
+The application's premise is that invalid data must be **persisted** and shown as
+`NEEDS_REVIEW`, never rejected. Any database constraint applied to a
+user-supplied column therefore turns a reportable business error into a failed
+insert -- and because the import runs in one transaction, one bad value loses
+the whole file.
+
+Hence one rule, applied to every kind of constraint:
+
+| Constraint | System-controlled columns | User-supplied columns |
+|---|---|---|
+| `NOT NULL` | yes — `id`, `batch_id`, `source_type`, `source_document_name`, `import_sequence`, `status`, `validation_errors`, `raw_payload`, timestamps | **no** |
+| `CHECK` on enums | yes — `status`, `source_type`, job status | **no** — `currency`, `category`, `payment_method` must be able to hold an unsupported value |
+| Length and precision | tight | **generous** — a too-long value is a business error, not a crash. ⚠️ *Stated as the rule, not yet applied: the schema still carries `country VARCHAR(2)` and similar. Tracked as a known limitation until corrected.* |
+| `UNIQUE` | — | **no** — see §2.4 |
+
+The certainty is not lost, it is relocated. It lives in three `NOT NULL`
+columns: `status` (the verdict), `validation_errors` (why), and `raw_payload`
+(what actually arrived). The database records the judgement instead of enforcing
+it destructively -- which is what a tool whose job is to get bad data corrected
+needs.
+
+Being strict on a user-supplied column is the single mistake this codebase is
+most likely to make, because it always looks like good schema design.
+
+### 2.4 Trap: `reference` has NO uniqueness constraint in the schema
 
 The assignment requires *"import all rows rather than rejecting the whole file"*,
 and the supplied CSV deliberately contains a duplicate (`TX-2026-0003`, row 21).
@@ -63,7 +89,13 @@ Uniqueness is therefore an **application-level validation rule**, not a schema
 constraint. This is an assumed exception to "constraints live in the database",
 and it is commented in the model so a reviewer does not "fix" it.
 
-### 2.4 Everything else
+The policy is **first occurrence wins**, and it must be stable: the same record
+must get the same verdict every time it is revalidated. That requires an
+explicit arrival order, which `import_sequence` provides -- a UUID primary key
+carries none. Uniqueness is compared against records that arrived *before* this
+one, which also excludes the record itself.
+
+### 2.5 Everything else
 
 | Topic | Rule |
 |---|---|
@@ -145,9 +177,14 @@ router = APIRouter(
 public_router = APIRouter(prefix="/auth", tags=["auth"])
 ```
 
-Forgetting to protect a route becomes **impossible without a deliberate act**:
-you would have to move it onto the public router. Two layers are preserved, but
-opt-out instead of opt-in.
+Forgetting to *authenticate* a route becomes **impossible without a deliberate
+act**: you would have to move it onto the public router.
+
+Be precise about what this buys, though. The dependency guarantees the tenant is
+**resolved** for every route on the router. It does **not** guarantee that each
+SQL query filters on that tenant -- that stays the query author's
+responsibility. The parametrised cross-tenant matrix in the test suite is what
+guards scoping, by failing when a route is added without it.
 
 Dependency chain:
 

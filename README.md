@@ -37,16 +37,13 @@ Two consequences this design is built for:
 
 ## Setup
 
+Every command below is run from the `backend/` directory.
+
 ```bash
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-```
-
-Copy the environment template and adjust if needed:
-
-```bash
-cp backend/.env.example backend/.env
+cp .env.example .env
 ```
 
 No API key is required at this stage.
@@ -54,7 +51,6 @@ No API key is required at this stage.
 ## Run
 
 ```bash
-cd backend
 .venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --reload
 ```
@@ -64,7 +60,6 @@ Interactive API documentation is generated at <http://localhost:8000/docs>.
 ## Tests
 
 ```bash
-cd backend
 .venv/bin/pytest
 ```
 
@@ -72,7 +67,6 @@ The suite is **hermetic**: no network, no API key, no external service. Tests
 that call a real AI provider are marked `live` and skipped automatically.
 
 ```bash
-cd backend
 .venv/bin/pytest -m "not live"
 ```
 
@@ -94,7 +88,8 @@ test asserts the exact set of error codes for every row.
 - Batch and record API: create, list, filter, field-level errors, correct,
   revalidate, approve, batch summary
 - Tenant scoping on every query, with cross-tenant access returning `404`
-- Alembic migrations, applied by the test suite from an empty database
+- Alembic migrations, applied by the test suite from an empty database (SQLite;
+  PostgreSQL portability is claimed, not yet verified in CI)
 - CI: lint, tests, secret scanning
 
 **Not yet**
@@ -120,6 +115,16 @@ Deliberately out of scope here, with the approach that would be taken:
   a duplicated row instead of rejecting the file. A partial unique index
   (`WHERE reference IS NOT NULL`) plus conflict handling that marks the losing
   row NEEDS_REVIEW would reconcile the constraint with that requirement.
+- **Column widths on PostgreSQL.** Several user-supplied columns are narrow
+  (`country VARCHAR(2)`, `reference VARCHAR(100)`). SQLite ignores these limits,
+  but PostgreSQL would reject an over-long invalid value and fail the whole
+  import — contradicting the requirement to import every row. The fix is
+  generous storage plus a maximum-length validation rule; it is not applied yet.
+- **Concurrent imports into one batch.** Both the duplicate check and the
+  arrival-order allocation read then write outside a lock, so two simultaneous
+  imports into the same batch can miss a duplicate between them. Sequential
+  imports are unaffected. Production would use an atomic counter or a unique
+  constraint with retry.
 - **TLS to a managed PostgreSQL**, rate limiting on authentication, and full
   security headers.
 

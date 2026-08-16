@@ -1,9 +1,11 @@
 """Test fixtures.
 
 The schema is created by running the real Alembic migrations, not
-`create_all()`. That way every test run also proves the migration works from an
-empty database -- which is what makes the PostgreSQL portability claim
-verifiable rather than merely asserted.
+`create_all()`. Every test run therefore also proves the migration applies to an
+empty database.
+
+This proves it for SQLite only. PostgreSQL portability stays a claim until a
+PostgreSQL service runs the same migrations in CI.
 """
 
 import csv

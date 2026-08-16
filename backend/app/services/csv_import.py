@@ -18,6 +18,7 @@ from app.domain.normalization import normalize_record
 from app.domain.validation import derive_status, validate_record
 from app.models import FinancialRecord, ImportBatch
 from app.schemas import ImportResult
+from app.services.records import next_import_sequence, references_before
 
 # A missing optional column (fee_amount, invoice_number...) is harmless: the
 # domain defaults it. Only columns required by the data dictionary make the
@@ -65,10 +66,12 @@ def import_csv(
             {"missing_columns": sorted(missing)},
         )
 
-    # References accumulate as rows are inserted, inside the same transaction.
-    # Uniqueness is scoped to the batch, and evaluated in arrival order: the
-    # SECOND occurrence of a reference is the offending one, not the first.
-    seen = frozenset()
+    # Uniqueness is scoped to the BATCH, not to the file. Seeding from what the
+    # batch already holds is what makes a reference imported by an earlier
+    # upload visible to a later one; starting from an empty set would silently
+    # let the same reference through twice.
+    sequence = next_import_sequence(session, batch.id)
+    seen = references_before(session, batch.id, sequence)
     by_status: dict[str, int] = {}
     imported = 0
 
@@ -86,6 +89,7 @@ def import_csv(
 
         record = FinancialRecord(
             batch_id=batch.id,
+            import_sequence=sequence,
             source_type="CSV",
             source_document_name=filename,
             status=record_status,
@@ -114,6 +118,7 @@ def import_csv(
         session.add(record)
         if normalized.reference:
             seen = seen | {normalized.reference}
+        sequence += 1
         by_status[record_status] = by_status.get(record_status, 0) + 1
         imported += 1
 

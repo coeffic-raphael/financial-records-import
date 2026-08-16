@@ -1,6 +1,8 @@
 """Batch endpoints and tenant scoping."""
 
-from app.models import ImportBatch, Tenant
+import pytest
+
+from app.models import FinancialRecord, ImportBatch, Tenant
 from tests.conftest import upload_csv
 
 
@@ -63,6 +65,63 @@ class TestTenantIsolation:
     def test_cannot_upload_into_another_tenant_batch(self, client, session, sample_csv):
         other = self._other_tenant_batch(session)
         assert upload_csv(client, other.id, sample_csv).status_code == 404
+
+
+class TestRecordRouteIsolation:
+    """Every record route, parametrised over the list rather than one test each.
+
+    The point is to protect the FUTURE: a route added later without tenant
+    scoping makes this suite fail, instead of creating a silent leak. The
+    router-level dependency guarantees the tenant is RESOLVED; it does not by
+    itself guarantee each query is SCOPED. Only this matrix does.
+    """
+
+    @pytest.fixture
+    def foreign_record(self, session) -> FinancialRecord:
+        tenant = Tenant(name="Demo Tenant B")
+        session.add(tenant)
+        session.flush()
+        batch = ImportBatch(name="Other tenant batch", tenant_id=tenant.id)
+        session.add(batch)
+        session.flush()
+        record = FinancialRecord(
+            batch_id=batch.id,
+            import_sequence=0,
+            source_type="CSV",
+            source_document_name="other.csv",
+            status="VALID",
+            validation_errors=[],
+            raw_payload={"reference": "OTHER-1"},
+            reference="OTHER-1",
+        )
+        session.add(record)
+        session.commit()
+        return record
+
+    @pytest.mark.parametrize(
+        ("method", "suffix", "payload"),
+        [
+            ("get", "", None),
+            ("get", "/validation-errors", None),
+            ("patch", "", {"description": "hijacked"}),
+            ("post", "/revalidate", None),
+            ("post", "/validate", None),
+        ],
+    )
+    def test_route_returns_404_for_another_tenant(
+        self, client, foreign_record, method, suffix, payload
+    ):
+        url = f"/api/records/{foreign_record.id}{suffix}"
+        response = getattr(client, method)(url, **({"json": payload} if payload else {}))
+
+        assert response.status_code == 404, f"{method.upper()} {url} leaked"
+        assert response.status_code != 403
+        assert "OTHER-1" not in response.text
+
+    def test_foreign_record_is_left_untouched(self, client, session, foreign_record):
+        client.patch(f"/api/records/{foreign_record.id}", json={"description": "hijacked"})
+        session.expire_all()
+        assert session.get(FinancialRecord, foreign_record.id).description is None
 
 
 class TestSummary:

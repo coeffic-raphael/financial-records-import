@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 
 from app.domain.countries import ISO_3166_1_ALPHA_2
-from app.domain.enums import Category, Currency, PaymentMethod, RecordStatus
+from app.domain.enums import Category, Currency, PaymentMethod, RecordStatus, SourceType
 from app.domain.errors import ErrorCode, FieldError
 from app.domain.record import NormalizedRecord
 
@@ -74,13 +74,26 @@ def check_non_negative_amounts(record: NormalizedRecord) -> list[FieldError]:
     return errors
 
 
-def check_net_amount(record: NormalizedRecord) -> list[FieldError]:
+AMOUNT_OPERANDS = ("gross_amount", "fee_amount", "tax_amount", "net_amount")
+
+
+def check_net_amount(
+    record: NormalizedRecord, fields_with_form_errors: frozenset[str] = frozenset()
+) -> list[FieldError]:
     """net_amount == gross_amount + tax_amount - fee_amount, tolerance 0.01.
 
-    Skipped when gross or net is missing: flagging an arithmetic inconsistency
-    on absent data helps nobody, and the missing field is already reported.
-    Absent fee and tax default to 0, per the data dictionary.
+    Two distinct reasons to skip the check, which must not be confused:
+
+    - an operand is MISSING -> gross or net absent means the formula has no
+      subject; fee and tax absent legitimately default to 0 per the data
+      dictionary, so the check still runs.
+    - an operand is UNREADABLE -> the formula cannot be evaluated at all. Note
+      that an unreadable fee normalizes to None, which would otherwise be read
+      as "absent, so zero" and produce a NET_AMOUNT_MISMATCH that is simply
+      false: we do not know what the fee was.
     """
+    if any(name in fields_with_form_errors for name in AMOUNT_OPERANDS):
+        return []
     if record.gross_amount is None or record.net_amount is None:
         return []
     fee = record.fee_amount if record.fee_amount is not None else Decimal(0)
@@ -149,7 +162,15 @@ def check_country(record: NormalizedRecord) -> list[FieldError]:
 def check_confidence(
     record: NormalizedRecord, threshold: Decimal = DEFAULT_CONFIDENCE_THRESHOLD
 ) -> list[FieldError]:
-    """PDF only: low confidence forces NEEDS_REVIEW even without field errors."""
+    """PDF only: low confidence forces NEEDS_REVIEW even without field errors.
+
+    The source check is not cosmetic. `extraction_confidence` is a PDF-only
+    field per the data dictionary; without this guard a CSV carrying a stray
+    `extraction_confidence` column would be flagged LOW_CONFIDENCE, which is
+    meaningless for a source that involves no extraction.
+    """
+    if record.source_type != SourceType.PDF.value:
+        return []
     if record.extraction_confidence is not None and record.extraction_confidence < threshold:
         return [
             _err(
@@ -201,7 +222,7 @@ def validate_record(
     errors += check_reference_uniqueness(record.reference, existing_references)
     errors += check_gross_amount_non_zero(record)
     errors += check_non_negative_amounts(record)
-    errors += check_net_amount(record)
+    errors += check_net_amount(record, fields_with_form_errors)
     errors += check_currency(record)
     errors += check_country(record)
     errors += check_category(record)

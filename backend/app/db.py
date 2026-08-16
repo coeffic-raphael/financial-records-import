@@ -20,6 +20,8 @@ class Money(TypeDecorator):
     lossless for values needing more than ~15 significant digits.
 
     So the value is stored as TEXT on SQLite and as NUMERIC on PostgreSQL.
+    Note that the PostgreSQL side is not exercised yet: it will be once a
+    PostgreSQL service joins CI.
 
     Consequence, deliberately accepted: amounts cannot be summed in SQL on
     SQLite. Batch summaries aggregate in Python instead, which is fine for the

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from app.db import Base, Money
-from app.domain.enums import RecordStatus, SourceType
+from app.domain.enums import JobStatus, RecordStatus, SourceType
 
 
 def _uuid() -> str:
@@ -97,6 +97,16 @@ class FinancialRecord(Base):
         String(UUID_LEN), ForeignKey("import_batch.id", ondelete="CASCADE"), nullable=False
     )
 
+    # Arrival order within the batch, assigned by the server; it continues
+    # across uploads. Allocation is not concurrency-safe -- see
+    # services.records.next_import_sequence. It exists to make the duplicate
+    # policy STABLE: "the first
+    # occurrence wins" needs an explicit order, and a UUID carries none. Without
+    # it, revalidating the first of two duplicates would see the second and flag
+    # the first as a duplicate of itself -- flipping a VALID record to
+    # NEEDS_REVIEW with no correction having taken place.
+    import_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+
     # --- Data dictionary fields ---
     reference: Mapped[str | None] = mapped_column(String(100))
     # Real Date columns: normalization already turned unreadable input into
@@ -145,6 +155,7 @@ class FinancialRecord(Base):
             name="ck_financial_record_source_type",
         ),
         Index("ix_financial_record_batch_status", "batch_id", "status"),
+        Index("ix_financial_record_batch_sequence", "batch_id", "import_sequence"),
     )
 
 
@@ -176,4 +187,13 @@ class ExtractionJob(Base):
         DateTime, default=_now, onupdate=_now, nullable=False
     )
 
-    __table_args__ = (Index("ix_extraction_job_batch", "batch_id"),)
+    __table_args__ = (
+        # Job status is system-controlled, so it is constrained -- same rule as
+        # FinancialRecord.status, and the same reason the user-supplied enums
+        # are not.
+        CheckConstraint(
+            "status IN ({})".format(", ".join(f"'{s.value}'" for s in JobStatus)),
+            name="ck_extraction_job_status",
+        ),
+        Index("ix_extraction_job_batch", "batch_id"),
+    )

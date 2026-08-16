@@ -5,10 +5,14 @@ Business validation errors (FieldError, persisted on a record) and API errors
 module owns the second one only.
 """
 
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class APIError(Exception):
@@ -68,7 +72,13 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def _unexpected(_: Request, exc: Exception) -> JSONResponse:
+    async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
+        # Hiding the details from the CLIENT must not mean losing them: without
+        # this line a 500 leaves no trace at all and becomes undiagnosable.
+        # Method and path only -- request bodies carry financial data.
+        logger.exception(
+            "Unhandled error on %s %s", request.method, request.url.path, exc_info=exc
+        )
         # Never leak a stack trace, a table name or a query fragment to a client.
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

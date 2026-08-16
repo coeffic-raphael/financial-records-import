@@ -9,14 +9,14 @@ from app.domain.validation import derive_status, validate_record
 from tests.factories import make_raw
 
 
-def codes(raw, **kwargs) -> list[ErrorCode]:
+def codes(raw, source_type: str = "CSV", **kwargs) -> list[ErrorCode]:
     """Normalize then validate, returning error codes only (never messages)."""
-    record, form_errors = normalize_record(raw)
+    record, form_errors = normalize_record(raw, source_type=source_type)
     return [e.code for e in validate_record(record, form_errors, **kwargs)]
 
 
-def fields(raw, **kwargs) -> list[str]:
-    record, form_errors = normalize_record(raw)
+def fields(raw, source_type: str = "CSV", **kwargs) -> list[str]:
+    record, form_errors = normalize_record(raw, source_type=source_type)
     return [e.field for e in validate_record(record, form_errors, **kwargs)]
 
 
@@ -91,6 +91,27 @@ class TestAmounts:
         result = codes(make_raw(gross_amount=""))
         assert result == [ErrorCode.REQUIRED_FIELD_MISSING]
 
+    def test_unreadable_operand_suppresses_the_net_check(self):
+        """An unreadable fee must not be read as "absent, therefore zero".
+
+        gross=1000 tax=170 net=1165 is consistent only if the fee is 5. With the
+        fee unreadable we cannot know, so claiming NET_AMOUNT_MISMATCH would be
+        asserting something false.
+        """
+        result = codes(make_raw(fee_amount="abc", net_amount="1165.00"))
+        assert result == [ErrorCode.NOT_NUMERIC]
+        assert ErrorCode.NET_AMOUNT_MISMATCH not in result
+
+    def test_absent_operand_still_defaults_to_zero(self):
+        """Absent is not unreadable: the formula still applies, with fee = 0."""
+        assert codes(make_raw(fee_amount="", net_amount="1170.00")) == []
+
+    def test_unreadable_operand_does_not_hide_a_genuine_mismatch(self):
+        """Only the net check is suppressed; every other rule still runs."""
+        result = codes(make_raw(fee_amount="abc", currency="JPY"))
+        assert ErrorCode.NOT_NUMERIC in result
+        assert ErrorCode.UNSUPPORTED_CURRENCY in result
+
     def test_cascade_across_different_fields_is_kept(self):
         """TX-2026-0027: negative fee AND inconsistent net. Both are reported."""
         result = codes(
@@ -136,15 +157,27 @@ class TestUniqueness:
 
 class TestConfidence:
     def test_low_confidence(self):
-        assert ErrorCode.LOW_CONFIDENCE in codes(make_raw(extraction_confidence="0.42"))
+        assert ErrorCode.LOW_CONFIDENCE in codes(
+            make_raw(extraction_confidence="0.42"), source_type="PDF"
+        )
 
     def test_sufficient_confidence(self):
-        assert codes(make_raw(extraction_confidence="0.95")) == []
+        assert codes(make_raw(extraction_confidence="0.95"), source_type="PDF") == []
 
     def test_threshold_is_configurable(self):
         raw = make_raw(extraction_confidence="0.80")
-        assert codes(raw) == []
-        assert ErrorCode.LOW_CONFIDENCE in codes(raw, confidence_threshold=Decimal("0.90"))
+        assert codes(raw, source_type="PDF") == []
+        assert ErrorCode.LOW_CONFIDENCE in codes(
+            raw, source_type="PDF", confidence_threshold=Decimal("0.90")
+        )
+
+    def test_csv_ignores_extraction_confidence(self):
+        """extraction_confidence is a PDF-only field per the data dictionary.
+
+        A CSV carrying a stray column must not be flagged LOW_CONFIDENCE: there
+        was no extraction to be confident about.
+        """
+        assert codes(make_raw(extraction_confidence="0.20"), source_type="CSV") == []
 
 
 class TestStatusDerivation:
