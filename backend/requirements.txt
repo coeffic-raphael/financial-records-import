@@ -1,0 +1,5 @@
+# Runtime dependencies.
+#
+# The domain layer (normalization, validation) uses the standard library only,
+# so no runtime dependency is required yet. FastAPI, Pydantic and SQLAlchemy
+# arrive with the persistence layer; the provider SDKs with the AI connector.
