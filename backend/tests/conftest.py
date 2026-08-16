@@ -11,12 +11,16 @@ PostgreSQL service runs the same migrations in CI.
 import csv
 import io
 import os
+import secrets
 
 # The test suite runs in mock mode: it must never build a real provider, and the
 # startup check would otherwise refuse to boot without a key. Set before any
 # module reads the settings.
 os.environ["EXTRACTION_PROVIDER"] = "mock"
-os.environ.setdefault("JWT_SECRET", "test-secret-long-enough-for-hs256-abcdefgh")
+# Generated rather than written down. Nothing in the suite depends on its value,
+# so a literal would only be a high-entropy string in the repository that a
+# secret scanner is right to flag and a reader has to think about.
+os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(32))
 os.environ.setdefault("COOKIE_SECURE", "false")
 from collections.abc import Iterator
 from pathlib import Path

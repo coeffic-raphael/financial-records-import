@@ -1,0 +1,9 @@
+# Findings reviewed and accepted, by fingerprint.
+#
+# A fingerprint pins one finding to one commit, file, rule and line, so an entry
+# here cannot mask anything else. Nothing is ignored by path or by rule.
+
+# A fixed JWT secret used by the test suite, never by the application. The
+# source was changed to generate the value instead, but the string remains in
+# this commit and the scan covers the whole history.
+00b3cfddf5f4894f6ccb152bf18474ab312918a3:backend/tests/conftest.py:generic-api-key:19
