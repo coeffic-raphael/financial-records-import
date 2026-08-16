@@ -40,8 +40,37 @@ class TestChaining:
                 MockProvider(raises=TransientProviderError("timeout")),
             ]
         )
-        with pytest.raises(ProviderError, match="Every provider in the chain failed"):
+        with pytest.raises(ProviderError, match="Every provider failed"):
             chain.extract(b"pdf", "x.pdf")
+
+    def test_the_message_names_every_provider_that_failed(self):
+        """Reporting only the last error hid why the PRIMARY provider gave up.
+
+        A chain ending on the fallback's rate limit says nothing about the one
+        that actually mattered.
+        """
+        chain = FallbackProvider(
+            [
+                MockProvider(raises=TransientProviderError("gemini quota exhausted")),
+                MockProvider(raises=TransientProviderError("openai has no credit")),
+            ]
+        )
+
+        with pytest.raises(ProviderError) as raised:
+            chain.extract(b"pdf", "x.pdf")
+
+        assert "gemini quota exhausted" in str(raised.value)
+        assert "openai has no credit" in str(raised.value)
+
+    def test_a_retried_failure_is_reported_once(self):
+        chain = FallbackProvider(
+            [MockProvider(raises=TransientProviderError("timeout"))], attempts_per_provider=3
+        )
+
+        with pytest.raises(ProviderError) as raised:
+            chain.extract(b"pdf", "x.pdf")
+
+        assert str(raised.value).count("timeout") == 1
 
     def test_an_empty_chain_is_rejected_at_construction(self):
         with pytest.raises(ValueError, match="at least one provider"):
