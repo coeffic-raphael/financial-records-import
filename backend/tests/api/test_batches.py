@@ -1,5 +1,6 @@
 """Batch endpoints and tenant scoping."""
 
+import pytest
 
 from app.models import ImportBatch, Tenant
 from tests.conftest import upload_csv
@@ -13,6 +14,20 @@ class TestBatchCrud:
 
     def test_create_rejects_empty_name(self, client):
         assert client.post("/api/batches", json={"name": ""}).status_code == 422
+
+    @pytest.mark.parametrize("name", ["", " ", "   ", "\t", "\n"])
+    def test_create_rejects_a_name_that_is_only_whitespace(self, client, name):
+        """min_length alone let a single space through.
+
+        A batch is chosen from a list by its name, so one with no readable
+        title is indistinguishable from the next. Registration already refused
+        a blank name; this closes the same hole on the other resource.
+        """
+        assert client.post("/api/batches", json={"name": name}).status_code == 422
+
+    def test_a_name_is_stored_trimmed(self, client):
+        response = client.post("/api/batches", json={"name": "  Q3 review  "})
+        assert response.json()["name"] == "Q3 review"
 
     def test_create_rejects_unknown_fields(self, client):
         response = client.post("/api/batches", json={"name": "X", "tenant_id": "sneaky"})

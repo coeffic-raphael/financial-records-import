@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer, StringConstraints
 
 
 def _serialize_money(value: Decimal | None) -> str | None:
@@ -114,9 +114,15 @@ class Page(BaseModel, Generic[ItemT]):
     offset: int
 
 
+# Stripping happens before the length check, so a name of spaces is refused
+# rather than stored as a batch with no readable title. Registration already
+# refuses a blank name; a batch had no equivalent.
+BatchName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
 class BatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=200)
+    name: BatchName
 
 
 class BatchOut(BaseModel):
