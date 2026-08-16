@@ -150,10 +150,31 @@ failing on someone's first upload.
 
 ## Run
 
+Two servers, one per terminal.
+
+**Backend**, from `backend/`:
+
 ```bash
 make seed
 make run
 ```
+
+**Frontend**, from `frontend/`:
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+Then open <http://localhost:5173> and sign in with one of the demo accounts
+above. The API's own documentation stays available at
+<http://localhost:8000/docs>.
+
+The frontend runs on a different origin from the API on purpose rather than
+behind a dev proxy: a proxy would put both on one origin and hide the CORS
+configuration and cookie rules that ship, so nobody would exercise them until
+production.
 
 Interactive API documentation is generated at <http://localhost:8000/docs>.
 
@@ -186,10 +207,15 @@ workspace left without an account, so nothing disappears silently.
 ## Tests
 
 ```bash
-make test
+make test          # backend, from backend/
 ```
 
-The suite is **hermetic**: no network, no API key, no external service, and no
+```bash
+npm run build      # frontend types and build, from frontend/
+npx vitest run     # frontend tests
+```
+
+The backend suite is **hermetic**: no network, no API key, no external service, and no
 billable API call. Tests that talk to a real provider are excluded by default,
 not merely marked — a mark enables selection, it does not deselect.
 
@@ -225,7 +251,10 @@ test asserts the exact set of error codes for every row.
   PostgreSQL portability is claimed, not yet verified in CI)
 - PDF extraction through Gemini, with an OpenAI fallback, per-field confidence,
   token accounting and background processing
-- CI: lint, tests on three Python versions, migration drift, secret scanning
+- React interface covering the whole workflow: sign-in, batches, upload,
+  extraction progress, filters, field-level errors, correction, approval
+- CI: lint, tests on three Python versions, migration drift, frontend types and
+  build, secret scanning
 
 **Not yet**
 

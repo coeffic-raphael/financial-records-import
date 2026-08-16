@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@layer base {
+  /* Without this the page inherits whatever the browser defaults to, which is
+     dark on a machine set to dark mode -- dark text on a dark background. The
+     interface is deliberately light, so it says so rather than relying on the
+     visitor's settings matching. color-scheme also keeps form controls light. */
+  html {
+    color-scheme: light;
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  body,
+  #root {
+    min-height: 100vh;
+  }
+}

@@ -83,6 +83,32 @@ jobs:
       - name: No undeclared model changes
         run: alembic check
 
+  frontend:
+    name: Frontend — types, tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # A linter was configured by the template and never run, while the backend
+      # has had ruff in CI from the start. Same standard on both sides.
+      - run: npm run lint
+
+      # The build runs tsc first, so a type error fails here rather than
+      # surviving because the dev server transpiles without checking.
+      - run: npm run build
+
+      - run: npm test
+
   secrets:
     name: Secret scanning
     runs-on: ubuntu-latest
