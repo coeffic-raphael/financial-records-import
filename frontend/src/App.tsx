@@ -15,11 +15,25 @@ installSessionBridge();
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((state) => state.user);
-  const { restoring } = useSessionRestore();
+  const { restoring, unreachable } = useSessionRestore();
 
   // Deciding before the restore attempt finishes would bounce every reload to
   // the login screen, which is what makes an in-memory token feel broken.
   if (restoring) return <p className="p-8 text-sm text-slate-500">Restoring session…</p>;
+
+  if (unreachable && !user) {
+    // Not "signed out" -- we simply could not ask. Saying so beats a login
+    // screen that suggests the session ended when it may not have.
+    return (
+      <div className="p-8">
+        <p className="text-sm font-medium text-slate-800">The server is unreachable.</p>
+        <p className="mt-1 text-sm text-slate-500">
+          It may be restarting. Reload the page once it is back.
+        </p>
+      </div>
+    );
+  }
+
   return user ? <>{children}</> : <Navigate to="/login" replace />;
 }
 

@@ -36,9 +36,23 @@ export function configureApiClient(reader: TokenReader, handler: SessionHandler)
  *     the whole session revoked -- the exact failure this guards against,
  *     arriving through a path that has nothing to do with concurrency.
  */
-let refreshInFlight: Promise<Session | null> | null = null;
+/**
+ * Three outcomes, not two.
+ *
+ * "The server said no" and "we could not reach the server" look the same to a
+ * try/catch and are opposites in meaning. Treating both as a lost session
+ * signed people out whenever the API restarted -- during a deploy, or every
+ * time a dev server reloaded. A connection error says nothing about the
+ * session, so it must not end one.
+ */
+export type RefreshOutcome =
+  | { status: "renewed"; session: Session }
+  | { status: "expired" }
+  | { status: "unreachable" };
 
-export async function refreshSession(): Promise<Session | null> {
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
+export async function refreshSession(): Promise<RefreshOutcome> {
   refreshInFlight ??= (async () => {
     try {
       const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
@@ -46,12 +60,14 @@ export async function refreshSession(): Promise<Session | null> {
         // Sends the httpOnly refresh cookie. The JavaScript never reads it.
         credentials: "include",
       });
-      if (!response.ok) return null;
+      if (!response.ok) return { status: "expired" } as const;
       const session = (await response.json()) as Session;
       onSessionChange(session);
-      return session;
+      return { status: "renewed", session } as const;
     } catch {
-      return null;
+      // fetch only rejects on a network-level failure; an HTTP error is a
+      // resolved response handled above.
+      return { status: "unreachable" } as const;
     } finally {
       refreshInFlight = null;
     }
@@ -78,6 +94,7 @@ interface RequestOptions {
   method?: string;
   body?: unknown;
   formData?: FormData;
+  expect?: "json" | "blob";
 }
 
 async function send(path: string, options: RequestOptions, token: string | null): Promise<Response> {
@@ -105,12 +122,18 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     response.status === 401 && token !== null && !path.startsWith("/api/auth/");
 
   if (worthRefreshing) {
-    const session = await refreshSession();
-    if (session === null) {
+    const outcome = await refreshSession();
+
+    if (outcome.status === "unreachable") {
+      // Keep the session: we have no evidence it ended, only that the network
+      // is momentarily unavailable.
+      throw new ApiError(0, "NETWORK_UNAVAILABLE", "The server is unreachable.");
+    }
+    if (outcome.status === "expired") {
       onSessionChange(null);
       throw await toApiError(response);
     }
-    response = await send(path, options, session.access_token);
+    response = await send(path, options, outcome.session.access_token);
 
     // Still refused with a fresh token: the session is not recoverable, and
     // leaving the user apparently signed in with a token the server rejects is
@@ -123,11 +146,14 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   if (!response.ok) throw await toApiError(response);
   if (response.status === 204) return undefined as T;
+  if (options.expect === "blob") return (await response.blob()) as T;
   return (await response.json()) as T;
 }
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  /** Binary responses: the document endpoint returns a file, not JSON. */
+  blob: (path: string) => request<Blob>(path, { expect: "blob" }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
   upload: <T>(path: string, formData: FormData) => request<T>(path, { method: "POST", formData }),

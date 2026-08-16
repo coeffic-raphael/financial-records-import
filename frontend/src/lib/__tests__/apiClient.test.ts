@@ -155,6 +155,13 @@ describe("error mapping", () => {
 });
 
 describe("session restoration", () => {
+  it("returns renewed with the session", async () => {
+    fetchMock.mockResolvedValueOnce(
+      response(200, { access_token: "t", user: { id: "u1" } }),
+    );
+    await expect(refreshSession()).resolves.toMatchObject({ status: "renewed" });
+  });
+
   it("shares one rotation between simultaneous restore attempts", async () => {
     /**
      * React StrictMode invokes effects twice in development. The second call
@@ -172,9 +179,9 @@ describe("session restoration", () => {
     expect(first).toBe(second);
   });
 
-  it("reports no session when the cookie is gone", async () => {
+  it("reports an expired session when the server refuses", async () => {
     fetchMock.mockResolvedValueOnce(response(401));
-    await expect(refreshSession()).resolves.toBeNull();
+    await expect(refreshSession()).resolves.toEqual({ status: "expired" });
   });
 
   it("hands the full session to the store, not just the token", async () => {
@@ -225,5 +232,37 @@ describe("when a 401 is NOT worth refreshing", () => {
     await expect(api.get("/api/batches")).rejects.toBeInstanceOf(ApiError);
     expect(sessionChanges.at(-1)).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe("an unreachable server is not an ended session", () => {
+  /**
+   * "The server said no" and "we could not reach the server" look identical to
+   * a try/catch and mean opposite things. Treating both as a lost session
+   * signed people out whenever the API restarted -- during a deploy, or every
+   * time a dev server reloaded.
+   */
+  it("reports unreachable rather than expired", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(refreshSession()).resolves.toEqual({ status: "unreachable" });
+  });
+
+  it("keeps the session when the network fails mid-request", async () => {
+    fetchMock
+      .mockResolvedValueOnce(response(401))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(api.get("/api/batches")).rejects.toMatchObject({
+      code: "NETWORK_UNAVAILABLE",
+    });
+    expect(sessionChanges).not.toContain(null);
+  });
+
+  it("still ends the session when the server actually refuses", async () => {
+    fetchMock.mockResolvedValueOnce(response(401)).mockResolvedValueOnce(response(401));
+
+    await expect(api.get("/api/batches")).rejects.toBeInstanceOf(ApiError);
+    expect(sessionChanges.at(-1)).toBeNull();
   });
 });
