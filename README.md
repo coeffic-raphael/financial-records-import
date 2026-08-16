@@ -71,7 +71,7 @@ and only delays the fallback.
 test suite runs against.
 
 Switching primary provider is one environment variable. That is not an
-aspiration: the mock satisfying the same interface is what 346 tests exercise.
+aspiration: the mock satisfying the same interface is what the suite exercises.
 
 ### Configuration
 

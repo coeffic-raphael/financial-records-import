@@ -49,9 +49,16 @@ class Settings(BaseSettings):
     extraction_provider: str = "gemini"
     gemini_api_key: str = ""
     openai_api_key: str = ""
-    gemini_model: str = "gemini-3.6-flash"
+    # Verified against the supplied documents. Newer flash models exist, but
+    # carry no free-tier quota on a personal key: every extraction comes back
+    # 429 and the feature looks broken rather than unfunded.
+    gemini_model: str = "gemini-3.5-flash"
     openai_model: str = "gpt-5.6"
-    extraction_timeout_seconds: float = 60.0
+    # Measured, not guessed: the supplied bank statement takes ~135 s to come
+    # back as eight records, where a one-record invoice takes ~25 s. A 60 s
+    # timeout aborted the statement every time -- the one document in the set
+    # that exercises multi-record extraction.
+    extraction_timeout_seconds: float = 180.0
     extraction_confidence_threshold: Decimal = Decimal("0.70")
 
     # The thread pool would happily run dozens of extractions at once, but free
