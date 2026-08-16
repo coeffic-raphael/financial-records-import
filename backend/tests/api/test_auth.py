@@ -240,3 +240,76 @@ class TestAccessControl:
         anonymous_client.headers["Authorization"] = f"Bearer {refresh}"
 
         assert anonymous_client.get("/api/batches").status_code == 401
+
+
+class TestEveryRouteIsProtectedByDefault:
+    """The guarantee behind putting the dependency on the router.
+
+    Conventions §3.4 claims that forgetting to authenticate a route is
+    impossible without a deliberate act. Nothing proved it: the cross-tenant
+    matrix only discovers routes carrying an id in their path, so the
+    collection endpoints -- `GET /api/batches`, `POST /api/batches`,
+    `GET /api/auth/me` -- were never asserted to need a token.
+
+    Discovery is from the OpenAPI schema, so a route added tomorrow is included
+    without anyone remembering to list it here.
+    """
+
+    # The deliberate act. A route only becomes reachable without a token by
+    # being added to this set, which is a visible line in a diff.
+    PUBLIC = frozenset(
+        {
+            ("GET", "/api/health"),
+            ("POST", "/api/auth/login"),
+            ("POST", "/api/auth/register"),
+            ("POST", "/api/auth/refresh"),
+            ("POST", "/api/auth/logout"),
+        }
+    )
+
+    @staticmethod
+    def _routes() -> list[tuple[str, str]]:
+        from app.main import create_app
+
+        paths = create_app().openapi()["paths"]
+        return sorted(
+            (method.upper(), path)
+            for path, operations in paths.items()
+            if path.startswith("/api")
+            for method in operations
+            if method.lower() in {"get", "post", "patch", "put", "delete"}
+        )
+
+    def test_the_discovery_found_the_application(self):
+        """Guard against an empty sweep passing for a clean one."""
+        assert len(self._routes()) >= 15
+
+    def test_no_route_answers_without_a_token(self, anonymous_client):
+        placeholder = "00000000-0000-0000-0000-000000000000"
+        for method, path in self._routes():
+            if (method, path) in self.PUBLIC:
+                continue
+            url = path.replace("{batch_id}", placeholder).replace("{record_id}", placeholder)
+            response = anonymous_client.request(method, url, json={})
+            assert response.status_code == 401, f"{method} {path} answered {response.status_code}"
+
+    def test_every_non_public_router_declares_the_dependency(self):
+        """The structural half of the same guarantee.
+
+        The behavioural test above proves today's routes are refused. This one
+        proves *why*: the dependency sits on the router, so a handler added
+        without an auth parameter inherits it. Asserted on the router objects
+        rather than by mutating them at runtime -- FastAPI registers routes
+        lazily, and a test that reaches into that is pinned to a version rather
+        than to the property.
+        """
+        from app.api import batches, records
+        from app.api.deps import current_tenant
+
+        for router in (batches.router, records.router):
+            declared = {dependency.dependency for dependency in router.dependencies}
+            assert current_tenant in declared, f"{router.prefix} is not protected by default"
+
+    def test_the_public_list_names_no_route_that_no_longer_exists(self):
+        """A stale exemption is how a route quietly stops being checked."""
+        assert set(self._routes()) >= self.PUBLIC
