@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { FieldErrorList } from "../components/FieldErrorList";
+import { SourceDocumentPanel } from "../components/SourceDocumentPanel";
 import {
   Button,
   ConfidenceBadge,
@@ -42,6 +43,30 @@ export function RecordEditorPage() {
   }
   return <RecordEditor record={record.data} />;
 }
+
+/**
+ * What the document actually said, when it differs from what is stored now.
+ *
+ * Telling "the model read this" from "someone typed this" is half the work of
+ * checking an extraction, and the raw payload has always held the answer.
+ */
+function AsExtracted({
+  current,
+  original,
+}: {
+  current: string | null;
+  original: string | null | undefined;
+}) {
+  const shown = original ?? "";
+  if (!shown || shown === (current ?? "")) return null;
+
+  return (
+    <p className="mt-1 text-xs text-slate-500">
+      As extracted: <span className="font-mono text-slate-600">{shown}</span>
+    </p>
+  );
+}
+
 
 /** Container for one record: owns the draft and the three actions. */
 function RecordEditor({ record }: { record: FinancialRecord }) {
@@ -93,6 +118,13 @@ function RecordEditor({ record }: { record: FinancialRecord }) {
         />
       )}
 
+      <SourceDocumentPanel
+        recordId={record.id}
+        filename={record.source_document_name}
+        reference={record.raw_payload.reference ?? record.reference}
+        available={record.has_source_document}
+      />
+
       <Panel title="Fields">
         <form
           className="grid gap-x-6 gap-y-4 sm:grid-cols-2"
@@ -125,6 +157,7 @@ function RecordEditor({ record }: { record: FinancialRecord }) {
                   }`}
                 />
                 <FieldErrorList errors={fieldErrors} />
+                <AsExtracted current={record[field]} original={record.raw_payload[field]} />
               </label>
             );
           })}

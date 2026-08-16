@@ -106,6 +106,7 @@ class BatchOut(BaseModel):
 class RecordOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+
     id: str
     batch_id: str
 
@@ -127,11 +128,17 @@ class RecordOut(BaseModel):
 
     source_type: str
     source_document_name: str
+    has_source_document: bool
     extraction_confidence: Money
     field_confidence: dict[str, float] | None
 
     status: str
     validation_errors: list[ValidationErrorOut]
+
+    # What arrived, before normalisation and before anyone corrected it.
+    # A reviewer comparing an extraction to its source needs to tell "the model
+    # read this" from "someone typed this".
+    raw_payload: dict
 
     created_at: datetime
     updated_at: datetime

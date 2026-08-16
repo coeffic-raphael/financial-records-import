@@ -31,10 +31,13 @@ export interface FinancialRecord {
   payment_method: string | null;
   source_type: SourceType;
   source_document_name: string;
+  has_source_document: boolean;
   extraction_confidence: string | null;
   field_confidence: Record<string, number> | null;
   status: RecordStatus;
   validation_errors: ValidationError[];
+  /** What arrived, before normalisation and before anyone corrected it. */
+  raw_payload: Record<string, string | null>;
   created_at: string;
   updated_at: string;
 }

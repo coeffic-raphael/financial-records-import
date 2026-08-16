@@ -5,12 +5,13 @@ server-side recomputation or the explicit `validate` action -- otherwise a
 client could declare itself VALIDATED without ever passing validation.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.api.deps import SessionDep, TenantDep, current_tenant
 from app.config import get_settings
 from app.models import FinancialRecord
 from app.schemas import RecordOut, RecordPatch, ValidationErrorOut
+from app.services.documents import read_for_record
 from app.services.records import (
     apply_correction,
     approve_record,
@@ -35,6 +36,39 @@ def read_validation_errors(
     record_id: str, session: SessionDep, tenant: TenantDep
 ) -> list[dict]:
     return get_record(session, record_id, tenant.id).validation_errors
+
+
+@router.get("/{record_id}/document")
+def read_source_document(
+    record_id: str, session: SessionDep, tenant: TenantDep
+) -> Response:
+    """Serve the document a record was extracted from.
+
+    Reviewing an extraction means comparing it to its source. Without this the
+    approval step signs for the machine's own consistency check rather than for
+    the data, which is not what VALIDATED is supposed to mean.
+
+    Three headers matter here, because this is content someone else uploaded:
+      - Content-Type comes from a closed list held by the server, never from the
+        upload, so a file cannot decide how the browser treats it;
+      - nosniff stops the browser from guessing a different one anyway;
+      - only PDFs are shown inline. Anything else is a download, since inline
+        rendering is where uploaded content turns into a scripting problem.
+    """
+    record = get_record(session, record_id, tenant.id)
+    document, content = read_for_record(session, record, get_settings().upload_storage_dir)
+
+    inline = document.media_type == "application/pdf"
+    quoted = document.filename.replace('"', "")
+    return Response(
+        content=content,
+        media_type=document.media_type,
+        headers={
+            "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{quoted}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; object-src 'none'; sandbox",
+        },
+    )
 
 
 @router.patch("/{record_id}", response_model=RecordOut)

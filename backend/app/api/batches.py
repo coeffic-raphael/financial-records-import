@@ -34,6 +34,7 @@ from app.schemas import (
     RecordOut,
 )
 from app.services.csv_import import import_csv
+from app.services.documents import store
 from app.services.pdf_extraction import create_jobs, run_extraction
 from app.services.summary import build_summary
 
@@ -60,7 +61,9 @@ PDF_MAGIC = b"%PDF"
 UPLOAD_CHUNK_BYTES = 64 * 1024
 
 
-async def _spool_upload(upload: UploadFile, max_bytes: int, fallback: str) -> tuple[str, Path]:
+async def _spool_upload(
+    upload: UploadFile, max_bytes: int, fallback: str, kind: str
+) -> tuple[str, Path]:
     """Stream an upload to disk, refusing it as soon as it is too large.
 
     Reading the whole body and then measuring it makes the size limit a
@@ -96,7 +99,7 @@ async def _spool_upload(upload: UploadFile, max_bytes: int, fallback: str) -> tu
         # The declared Content-Type is client-supplied and therefore not
         # evidence. Checking the real signature costs four bytes and stops a
         # mislabelled file from reaching a paid API only to fail there.
-        if not head.startswith(PDF_MAGIC):
+        if kind == "pdf" and not head.startswith(PDF_MAGIC):
             raise APIError(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "NOT_A_PDF",
@@ -160,20 +163,29 @@ async def upload_csv(
     batch = _get_batch(session, batch_id, tenant.id)
     settings = get_settings()
 
-    content = await file.read()
-    if len(content) > settings.max_upload_bytes:
-        raise APIError(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            "FILE_TOO_LARGE",
-            "The uploaded file exceeds the maximum allowed size.",
-            {"max_bytes": settings.max_upload_bytes},
+    # Spooled like a PDF, so the size limit bounds memory here too, and stored
+    # for the same reason: a reviewer checking an imported row should be able to
+    # open the file it came from.
+    filename, spooled = await _spool_upload(file, settings.max_upload_bytes, "upload.csv", "csv")
+    try:
+        document = store(
+            session,
+            batch,
+            filename=filename,
+            kind="csv",
+            spooled=spooled,
+            root=settings.upload_storage_dir,
         )
-
-    filename = _safe_filename(file.filename, "upload.csv")
-
-    return import_csv(
-        session, batch, filename, content, settings.extraction_confidence_threshold
-    )
+        return import_csv(
+            session,
+            batch,
+            filename,
+            spooled.read_bytes(),
+            settings.extraction_confidence_threshold,
+            document_id=document.id,
+        )
+    finally:
+        spooled.unlink(missing_ok=True)
 
 
 @router.post(
@@ -208,16 +220,28 @@ async def upload_pdfs(
     try:
         for upload in files:
             spooled.append(
-                await _spool_upload(upload, settings.max_upload_bytes, "document.pdf")
+                await _spool_upload(upload, settings.max_upload_bytes, "document.pdf", "pdf")
             )
     except BaseException:
         for _, path in spooled:
             path.unlink(missing_ok=True)
         raise
 
+    documents = [
+        store(
+            session,
+            batch,
+            filename=filename,
+            kind="pdf",
+            spooled=path,
+            root=settings.upload_storage_dir,
+        )
+        for filename, path in spooled
+    ]
+
     # One transaction for every job, so a failure part-way cannot leave a job
     # persisted as PENDING with no task ever queued for it.
-    jobs = create_jobs(session, batch, [name for name, _ in spooled])
+    jobs = create_jobs(session, batch, documents)
 
     for job, (filename, path) in zip(jobs, spooled, strict=True):
         # Queued rather than awaited; the task opens its own session, reads the

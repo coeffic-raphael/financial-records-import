@@ -108,6 +108,47 @@ class RefreshToken(Base):
     __table_args__ = (Index("ix_refresh_token_user", "user_id"),)
 
 
+class SourceDocument(Base):
+    """A file someone uploaded, kept so its extraction can be checked against it.
+
+    A document has identity, a size and a fingerprint, so it is a table rather
+    than columns on a record -- unlike validation_errors, which are a derived
+    value replaced wholesale.
+
+    Keeping it is what gives VALIDATED its meaning. Approving a record extracted
+    from a document nobody can open is signing for the machine's own
+    consistency check, not for the data.
+    """
+
+    __tablename__ = "source_document"
+
+    id: Mapped[str] = mapped_column(String(UUID_LEN), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = mapped_column(
+        String(UUID_LEN), ForeignKey("import_batch.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # The name as uploaded, sanitised. Stored as data, never used as a path.
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Set by the server from a closed list, never taken from the client, so it
+    # cannot be used to have the browser interpret the file as something else.
+    media_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Enables duplicate-document detection without reading the file again.
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "media_type IN ('application/pdf', 'text/csv')", name="ck_source_document_media_type"
+        ),
+        Index("ix_source_document_batch", "batch_id"),
+        Index("ix_source_document_hash", "batch_id", "content_sha256"),
+    )
+
+
 class ImportBatch(Base):
     __tablename__ = "import_batch"
 
@@ -196,7 +237,13 @@ class FinancialRecord(Base):
     payment_method: Mapped[str | None] = mapped_column(Text)
 
     source_type: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    # The data dictionary requires the name; the reference is ours, so a
+    # reviewer can open the document the values came from.
     source_document_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_document_id: Mapped[str | None] = mapped_column(
+        String(UUID_LEN), ForeignKey("source_document.id", ondelete="SET NULL")
+    )
     # Storage stays as generous as for amounts, deliberately. A tight
     # NUMERIC(3, 2) would not have enforced [0, 1] anyway -- it accepts 9.99 --
     # while making 10.00 a failed INSERT instead of a reportable error. The
@@ -217,6 +264,11 @@ class FinancialRecord(Base):
     )
 
     batch: Mapped[ImportBatch] = relationship(back_populates="records")
+
+    @property
+    def has_source_document(self) -> bool:
+        """Whether a reviewer can open what this record came from."""
+        return self.source_document_id is not None
 
     __table_args__ = (
         CheckConstraint(
@@ -250,6 +302,9 @@ class ExtractionJob(Base):
     # client-supplied filename, and a long one must not break job creation
     # before extraction has even started.
     document_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_document_id: Mapped[str | None] = mapped_column(
+        String(UUID_LEN), ForeignKey("source_document.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     provider: Mapped[str | None] = mapped_column(String(32))
     model: Mapped[str | None] = mapped_column(Text)

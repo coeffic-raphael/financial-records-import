@@ -28,6 +28,7 @@ def persist_records(
     document_name: str,
     confidence_threshold: Decimal,
     field_confidences: Sequence[dict[str, float]] | None = None,
+    document_id: str | None = None,
 ) -> dict[str, int]:
     """Normalize, validate and add rows to the session. Returns count per status.
 
@@ -72,6 +73,7 @@ def persist_records(
             import_sequence=sequence,
             source_type=source_type,
             source_document_name=document_name,
+            source_document_id=document_id,
             status=status,
             validation_errors=[error.as_dict() for error in errors],
             raw_payload=payload,

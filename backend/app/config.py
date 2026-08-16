@@ -21,6 +21,11 @@ class Settings(BaseSettings):
 
     max_upload_bytes: int = 10 * 1024 * 1024
 
+    # Uploaded documents are kept so a reviewer can check an extraction against
+    # its source. Outside any served directory: nothing here is reachable except
+    # through the tenant-scoped endpoint.
+    upload_storage_dir: str = "./uploads"
+
     # --- Authentication ---
     debug: bool = False
     jwt_secret: str = ""

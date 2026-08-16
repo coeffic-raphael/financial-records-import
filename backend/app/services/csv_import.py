@@ -42,6 +42,7 @@ def import_csv(
     filename: str,
     content: bytes,
     confidence_threshold: Decimal,
+    document_id: str | None = None,
 ) -> ImportResult:
     try:
         # utf-8-sig transparently strips the BOM spreadsheet exports often add.
@@ -72,6 +73,7 @@ def import_csv(
         source_type="CSV",
         document_name=filename,
         confidence_threshold=confidence_threshold,
+        document_id=document_id,
     )
     # The service owns the transaction: one commit for the whole file, so a
     # failure part-way leaves nothing behind.

@@ -59,7 +59,7 @@ class TestReadingStopsAtTheThreshold:
     def _spool(self, total: int, limit: int = LIMIT) -> LazyStream:
         stream = LazyStream(total)
         upload = UploadFile(file=stream, filename="huge.pdf")
-        asyncio.run(_spool_upload(upload, limit, "document.pdf"))
+        asyncio.run(_spool_upload(upload, limit, "document.pdf", "pdf"))
         return stream
 
     def test_an_oversized_body_is_abandoned_early(self):
@@ -75,7 +75,7 @@ class TestReadingStopsAtTheThreshold:
         upload = UploadFile(file=stream, filename="huge.pdf")
 
         with pytest.raises(APIError):
-            asyncio.run(_spool_upload(upload, LIMIT, "document.pdf"))
+            asyncio.run(_spool_upload(upload, LIMIT, "document.pdf", "pdf"))
 
         assert stream.served <= LIMIT + UPLOAD_CHUNK_BYTES, (
             f"{stream.served} bytes were read before refusing a {stream.total} byte upload"
@@ -86,7 +86,7 @@ class TestReadingStopsAtTheThreshold:
         stream = LazyStream(UPLOAD_CHUNK_BYTES * 3)
         upload = UploadFile(file=stream, filename="ok.pdf")
 
-        _, path = asyncio.run(_spool_upload(upload, LIMIT, "document.pdf"))
+        _, path = asyncio.run(_spool_upload(upload, LIMIT, "document.pdf", "pdf"))
 
         assert stream.served == stream.total
         assert path.stat().st_size == stream.total

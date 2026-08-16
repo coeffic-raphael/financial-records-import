@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.domain.enums import JobStatus, SourceType
-from app.models import ExtractionJob, ImportBatch
+from app.models import ExtractionJob, ImportBatch, SourceDocument
 from app.providers.base import ExtractionProvider, ProviderError
 from app.services.ingestion import persist_records
 
@@ -47,7 +47,7 @@ def reset_semaphore(limit: int | None = None) -> None:
 
 
 def create_jobs(
-    session: Session, batch: ImportBatch, filenames: Sequence[str]
+    session: Session, batch: ImportBatch, documents: Sequence[SourceDocument]
 ) -> list[ExtractionJob]:
     """Persist one PENDING job per file, in a SINGLE transaction.
 
@@ -57,9 +57,12 @@ def create_jobs(
     """
     jobs = [
         ExtractionJob(
-            batch_id=batch.id, document_name=filename, status=JobStatus.PENDING.value
+            batch_id=batch.id,
+            document_name=document.filename,
+            source_document_id=document.id,
+            status=JobStatus.PENDING.value,
         )
-        for filename in filenames
+        for document in documents
     ]
     session.add_all(jobs)
     session.commit()
@@ -141,6 +144,7 @@ def _run(
                 document_name=filename,
                 confidence_threshold=settings.extraction_confidence_threshold,
                 field_confidences=result.field_confidence,
+                document_id=job.source_document_id,
             )
 
             job.status = JobStatus.SUCCEEDED.value
