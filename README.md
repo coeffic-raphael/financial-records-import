@@ -36,18 +36,28 @@ Two consequences this design is built for:
 PDF content is extracted by a language model and converted into the same
 normalized records a CSV produces.
 
-**Google Gemini** is the primary provider, for three reasons: it reads PDFs
-natively so no page-to-image conversion is needed, it constrains the response to
-a JSON schema server-side rather than merely asking for one in the prompt, and
-its free tier makes iterating during development free.
+**The choice of vendor is deliberately not load-bearing.** Reading fifteen
+fields off a two-page invoice is not a discriminating task: both candidates read
+PDFs natively and constrain their output to a JSON schema server-side, so
+capability did not decide anything. What decided it is the path to production.
 
-**OpenAI** is configured as the second link of a fallback chain. When both keys
-are present, a transient failure on the primary falls through instead of failing
-the extraction. A permanent failure — bad key, unknown model — is never retried,
-since retrying cannot help and only delays the fallback.
+**Google Gemini** is the primary provider because the same SDK reaches Vertex
+AI, where processing can be pinned to an EU region (`europe-west1`) under a data
+residency commitment. For an application handling European bank statements that
+is a regulatory requirement, and it costs a constructor argument rather than a
+rewrite: the prototype and a sovereign deployment share the same connector,
+schema, prompt and tests.
 
-**Mock** keeps the application fully usable with no credentials at all, and is
-what the test suite uses.
+**OpenAI** is implemented as the second link of a fallback chain. When both keys
+are present, a transient failure on the primary falls through. A permanent
+failure — bad key, unknown model — is never retried, since retrying cannot help
+and only delays the fallback.
+
+**Mock** keeps the application fully usable with no credentials, and is what the
+test suite runs against.
+
+Switching primary provider is one environment variable. That is not an
+aspiration: the mock satisfying the same interface is what 346 tests exercise.
 
 ### Configuration
 
@@ -62,6 +72,9 @@ key may ever carry a `VITE_` prefix: those are compiled into the browser bundle.
 Extraction is server-side only, and the frontend never learns which provider is
 used.
 
+A misconfigured provider **stops the application from starting** rather than
+surfacing as an error on someone's first upload.
+
 ### What the model is told, and what it is not trusted with
 
 The prompt states five constraints drawn from the supplied documents — most
@@ -75,9 +88,9 @@ optional in that schema: whether a field is required is a business rule, so it
 belongs to the domain. An incomplete extraction therefore produces a
 `NEEDS_REVIEW` record rather than a parse failure.
 
-Confidence is reported per field and aggregated to the **minimum** across
-required fields — a record is only as trustworthy as its least certain required
-value.
+Confidence is reported per field, bounded to `[0, 1]`, and aggregated to the
+**minimum** across required fields — a record is only as trustworthy as its
+least certain required value.
 
 ### Processing
 
@@ -181,6 +194,13 @@ Deliberately out of scope here, with the approach that would be taken:
   a duplicated row instead of rejecting the file. A partial unique index
   (`WHERE reference IS NOT NULL`) plus conflict handling that marks the losing
   row NEEDS_REVIEW would reconcile the constraint with that requirement.
+- **EU data residency.** The public Gemini endpoint offers no region control.
+  Production would use the same SDK against Vertex AI with `location` pinned to
+  an EU region, which is a constructor argument rather than a redesign.
+- **Unpaid provider tiers must not receive real documents.** Google's terms
+  allow human review of content submitted through the unpaid service and
+  explicitly warn against sending confidential information. The sample documents
+  here are synthetic; real bank statements require the paid tier.
 - **Concurrent imports into one batch.** Both the duplicate check and the
   arrival-order allocation read then write outside a lock, so two simultaneous
   imports into the same batch can miss a duplicate between them. Sequential

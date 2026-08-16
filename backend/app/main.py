@@ -1,6 +1,8 @@
 """Application factory."""
 
-from collections.abc import Awaitable, Callable
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,11 +11,34 @@ from fastapi.responses import RedirectResponse
 from app.api import batches, records
 from app.api.errors import register_error_handlers
 from app.config import get_settings
+from app.providers.registry import build_provider
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Refuse to start on a provider configuration that cannot work.
+
+    Building the provider lazily on the first request means a missing key
+    surfaces as a 500 on someone's first upload. They would have watched the
+    application start, believed it healthy, and only found out by handing it a
+    document. Failing here says what is wrong before anyone tries.
+    """
+    settings = get_settings()
+    try:
+        provider = build_provider(settings)
+    except ValueError as error:
+        logger.error("Extraction provider is misconfigured: %s", error)
+        raise
+    logger.info("Extraction provider ready: %s", provider.name)
+    yield
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
+        lifespan=lifespan,
         title="Financial Records Import",
         description="Imports, extracts, validates, corrects and approves financial records "
         "from CSV and PDF sources.",

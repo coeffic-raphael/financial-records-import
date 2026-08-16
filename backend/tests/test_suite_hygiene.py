@@ -56,3 +56,60 @@ def test_no_test_module_imports_a_provider_sdk():
         if _imported_modules(path.read_text()) & SDK_MODULES:
             offenders.append(path.name)
     assert offenders == []
+
+
+class TestStartupRefusesBadConfiguration:
+    """A misconfigured provider must stop the application, not the first upload.
+
+    Building it lazily meant someone could watch the app start, believe it
+    healthy, and only discover the missing key by handing it a document.
+    """
+
+    def test_a_missing_key_prevents_startup(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from app.config import get_settings
+        from app.main import create_app
+
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "gemini")
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+        get_settings.cache_clear()
+
+        with pytest.raises(ValueError, match="GEMINI_API_KEY is required"), TestClient(
+            create_app()
+        ):
+            pass
+
+        get_settings.cache_clear()
+
+    def test_an_unknown_provider_prevents_startup(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from app.config import get_settings
+        from app.main import create_app
+
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "not-a-provider")
+        get_settings.cache_clear()
+
+        with pytest.raises(ValueError, match="Unknown EXTRACTION_PROVIDER"), TestClient(
+            create_app()
+        ):
+            pass
+
+        get_settings.cache_clear()
+
+    def test_mock_starts_with_no_credentials_at_all(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from app.config import get_settings
+        from app.main import create_app
+
+        monkeypatch.setenv("EXTRACTION_PROVIDER", "mock")
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        get_settings.cache_clear()
+
+        with TestClient(create_app()) as client:
+            assert client.get("/api/health").json() == {"status": "ok"}
+
+        get_settings.cache_clear()

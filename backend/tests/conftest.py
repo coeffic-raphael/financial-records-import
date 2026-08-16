@@ -10,6 +10,12 @@ PostgreSQL service runs the same migrations in CI.
 
 import csv
 import io
+import os
+
+# The test suite runs in mock mode: it must never build a real provider, and the
+# startup check would otherwise refuse to boot without a key. Set before any
+# module reads the settings.
+os.environ["EXTRACTION_PROVIDER"] = "mock"
 from collections.abc import Iterator
 from pathlib import Path
 
