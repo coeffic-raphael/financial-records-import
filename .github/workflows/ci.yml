@@ -4,10 +4,37 @@ on:
   push:
   pull_request:
 
+env:
+  PRIMARY_PYTHON: "3.11"
+
 jobs:
-  backend:
-    name: Backend — lint and tests
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+
+  tests:
+    name: Tests — Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Do not cancel the other versions when one fails: knowing whether a
+      # failure is version-specific is the whole point of the matrix.
+      fail-fast: false
+      matrix:
+        # requirements.txt claims "3.11 or newer". Testing a single version
+        # would leave that claim unverified on the versions a reviewer is most
+        # likely to already have installed.
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         working-directory: backend
@@ -16,7 +43,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
@@ -24,13 +51,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Lint
-        run: ruff check .
-
       # -m "not live" excludes tests that call a real AI provider. No repository
       # secret is needed: the suite is hermetic by design.
       - name: Tests
         run: pytest -m "not live"
+
+  migrations:
+    name: Migrations match the models
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: sqlite:///./ci_migration_check.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # Also proves the schema builds from nothing, which is what makes the
+      # PostgreSQL portability claim verifiable rather than merely asserted.
+      - name: Upgrade from an empty database
+        run: alembic upgrade head
+
+      # Catches the classic drift: a column added to a model without a matching
+      # revision. The test suite would NOT catch it -- it applies migrations and
+      # then talks to the ORM, so the mismatch only surfaces on deployment.
+      - name: No undeclared model changes
+        run: alembic check
 
   secrets:
     name: Secret scanning
