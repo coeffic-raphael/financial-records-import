@@ -64,7 +64,7 @@ Hence one rule, applied to every kind of constraint:
 |---|---|---|
 | `NOT NULL` | yes — `id`, `batch_id`, `source_type`, `source_document_name`, `import_sequence`, `status`, `validation_errors`, `raw_payload`, timestamps | **no** |
 | `CHECK` on enums | yes — `status`, `source_type`, job status | **no** — `currency`, `category`, `payment_method` must be able to hold an unsupported value |
-| Length and precision | tight | **generous** — a too-long value is a business error, not a crash. ⚠️ *Stated as the rule, not yet applied: the schema still carries `country VARCHAR(2)` and similar. Tracked as a known limitation until corrected.* |
+| Length and precision | tight | **generous** — user-supplied columns are `TEXT`; a too-long value is a business error (`VALUE_TOO_LONG`), not a crash |
 | `UNIQUE` | — | **no** — see §2.4 |
 
 The certainty is not lost, it is relocated. It lives in three `NOT NULL`
@@ -74,7 +74,26 @@ it destructively -- which is what a tool whose job is to get bad data corrected
 needs.
 
 Being strict on a user-supplied column is the single mistake this codebase is
-most likely to make, because it always looks like good schema design.
+most likely to make, because it always looks like good schema design. It has
+been made three times so far — nullability, `CHECK` constraints and column
+widths — and only the third one reached the schema, where `country VARCHAR(2)`
+would have made PostgreSQL reject the value `LUX` and lose the whole import.
+SQLite ignores `VARCHAR` limits, so no test could have caught it.
+
+Amounts get the same treatment from the other side. A value beyond
+`NUMERIC(18, 2)` is reported as `AMOUNT_OUT_OF_RANGE` rather than handed to the
+database to reject, and a value with more than two decimals is reported as
+`AMOUNT_SCALE_EXCEEDED` rather than quietly rounded.
+
+That second one guards a rule worth stating on its own: **what validation
+accepts must be what storage keeps.** Accepting `0.0001`, declaring the record
+VALID because the amount is non-zero, and then storing `0.00` makes the record
+assert something about a value the database never received. Rounding money
+silently is worse than refusing it.
+
+The one deliberate exception is `extraction_confidence`, which *is* rounded to
+two decimals: it is an estimate, so 0.9512 and 0.95 carry the same meaning.
+Rounding money loses money; rounding a confidence loses nothing anyone acts on.
 
 ### 2.4 Trap: `reference` has NO uniqueness constraint in the schema
 
@@ -104,7 +123,10 @@ one, which also excludes the record itself.
 | Foreign keys | Declared in the database, with `ON DELETE CASCADE` on `batch → records` |
 | Indexes | `import_batch(tenant_id)`, `financial_record(batch_id, status)`, unique `user(email)`, unique `refresh_token(token_hash)` |
 | Timestamps | `created_at` everywhere, `updated_at` on mutable tables (`financial_record`) |
-| Migrations | **Alembic from the start**, never `create_all()` — this is what makes Postgres portability verifiable |
+| Migrations | **Alembic from the start**, never `create_all()` |
+| Migration history | **Immutable.** A committed migration must keep running forever, so a symbol it references is never renamed away — see the `Money` alias in `db.py` |
+| Backfills | A new `NOT NULL` column is added nullable, backfilled, then tightened. A `server_default` would quietly give every existing row the same value |
+| `alembic check` blind spot | It runs on SQLite, where `ExactDecimal(3, 2)` and `ExactDecimal(18, 2)` both render as `String(64)`. A precision change is therefore invisible to it. Type changes that only differ on PostgreSQL need review, not CI |
 
 ---
 

@@ -108,6 +108,44 @@ def test_positions_restart_at_zero_for_each_batch(legacy_database):
         assert positions == sorted(set(positions))
 
 
+USER_SUPPLIED_TEXT_COLUMNS = [
+    ("financial_record", "reference"),
+    ("financial_record", "currency"),
+    ("financial_record", "counterparty_name"),
+    ("financial_record", "counterparty_account"),
+    ("financial_record", "country"),
+    ("financial_record", "category"),
+    ("financial_record", "invoice_number"),
+    ("financial_record", "payment_method"),
+    ("financial_record", "description"),
+    ("financial_record", "source_document_name"),
+    ("extraction_job", "document_name"),
+]
+
+
+@pytest.mark.parametrize(("table", "column"), USER_SUPPLIED_TEXT_COLUMNS)
+def test_user_supplied_columns_are_unbounded_after_migration(legacy_database, table, column):
+    """Assert the SQL type itself, not merely the behaviour.
+
+    Behavioural tests cannot prove this one: SQLite ignores VARCHAR limits, so
+    an over-long value is accepted whether the column is TEXT or VARCHAR(2).
+    Reading the declared type is the only check available here. Full proof needs
+    PostgreSQL in CI.
+    """
+    command.upgrade(_config(legacy_database), "head")
+
+    connection = sqlite3.connect(legacy_database.removeprefix("sqlite:///"))
+    declared = {
+        row[1]: row[2] for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+    connection.close()
+
+    assert declared[column] == "TEXT", (
+        f"{table}.{column} is {declared[column]}; a bounded type would make "
+        "PostgreSQL reject an invalid value and fail the whole import"
+    )
+
+
 def test_column_has_no_server_default(legacy_database):
     """A default would quietly assign 0 to a code path that forgot to allocate."""
     command.upgrade(_config(legacy_database), "head")

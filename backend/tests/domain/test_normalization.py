@@ -32,16 +32,33 @@ class TestNormalizeAmount:
             (None, None),
         ],
     )
-    def test_readable(self, raw, expected):
-        value, readable = normalize_amount(raw)
-        assert readable is True
+    def test_usable(self, raw, expected):
+        value, problem = normalize_amount(raw)
+        assert problem is None
         assert value == expected
 
     @pytest.mark.parametrize("raw", ["abc", "12abc", "--5", "1.2.3,4,5"])
-    def test_unreadable(self, raw):
-        value, readable = normalize_amount(raw)
-        assert readable is False
+    def test_not_numeric(self, raw):
+        value, problem = normalize_amount(raw)
+        assert problem is ErrorCode.NOT_NUMERIC
         assert value is None
+
+    @pytest.mark.parametrize("raw", ["99999999999999999999.00", "-1" + "0" * 20])
+    def test_out_of_range_is_reported_distinctly(self, raw):
+        """Too large to store is a different problem from not being a number.
+
+        NUMERIC(18, 2) leaves sixteen integer digits; PostgreSQL would refuse the
+        INSERT and, since the import is one transaction, lose the whole file.
+        Catching it here turns a crash into a reportable field error.
+        """
+        value, problem = normalize_amount(raw)
+        assert problem is ErrorCode.AMOUNT_OUT_OF_RANGE
+        assert value is None
+
+    def test_largest_storable_amount_is_accepted(self):
+        value, problem = normalize_amount("9999999999999999.99")
+        assert problem is None
+        assert value == Decimal("9999999999999999.99")
 
     def test_never_uses_float(self):
         value, _ = normalize_amount("0.1")
@@ -60,15 +77,15 @@ class TestNormalizeDate:
             (None, None),
         ],
     )
-    def test_readable(self, raw, expected):
-        value, readable = normalize_date(raw)
-        assert readable is True
+    def test_usable(self, raw, expected):
+        value, problem = normalize_date(raw)
+        assert problem is None
         assert value == expected
 
     @pytest.mark.parametrize("raw", ["2026-13-16", "bad-date", "32/01/2026", "07/2026"])
-    def test_unreadable(self, raw):
-        value, readable = normalize_date(raw)
-        assert readable is False
+    def test_invalid(self, raw):
+        value, problem = normalize_date(raw)
+        assert problem is ErrorCode.INVALID_DATE
         assert value is None
 
 

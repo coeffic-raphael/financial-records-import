@@ -31,6 +31,21 @@ REQUIRED_FIELDS = (
 )
 
 NET_AMOUNT_TOLERANCE = Decimal("0.01")
+
+# Storage is generous (TEXT), so an over-long value can no longer break an
+# INSERT. These bounds are about data quality, not about column capacity: a
+# 4000-character counterparty name is a broken import, not a supplier.
+MAX_FIELD_LENGTHS = {
+    "reference": 100,
+    "description": 2000,
+    "counterparty_name": 300,
+    "counterparty_account": 100,
+    "country": 100,
+    "category": 100,
+    "currency": 100,
+    "invoice_number": 100,
+    "payment_method": 100,
+}
 DEFAULT_CONFIDENCE_THRESHOLD = Decimal("0.70")
 
 
@@ -147,6 +162,27 @@ def check_payment_method(record: NormalizedRecord) -> list[FieldError]:
     return []
 
 
+def check_field_lengths(record: NormalizedRecord) -> list[FieldError]:
+    """Flag values that are too long to be plausible.
+
+    The value is still stored: raw_payload keeps the original and the column is
+    TEXT, so nothing is lost and nothing crashes. Overall input size is bounded
+    upstream by the upload limit.
+    """
+    errors = []
+    for name, limit in MAX_FIELD_LENGTHS.items():
+        value = getattr(record, name)
+        if value is not None and len(value) > limit:
+            errors.append(
+                _err(
+                    name,
+                    ErrorCode.VALUE_TOO_LONG,
+                    f"{name} is {len(value)} characters long, maximum is {limit}.",
+                )
+            )
+    return errors
+
+
 def check_country(record: NormalizedRecord) -> list[FieldError]:
     if record.country is not None and record.country not in ISO_3166_1_ALPHA_2:
         return [
@@ -154,6 +190,28 @@ def check_country(record: NormalizedRecord) -> list[FieldError]:
                 "country",
                 ErrorCode.INVALID_COUNTRY_CODE,
                 f"Unknown ISO 3166-1 alpha-2 country code: {record.country}.",
+            )
+        ]
+    return []
+
+
+def check_confidence_range(record: NormalizedRecord) -> list[FieldError]:
+    """A confidence outside [0, 1] is meaningless.
+
+    NUMERIC(3, 2) would not have enforced this -- it accepts up to 9.99 -- and
+    relying on the column would have made 10.00 a failed INSERT rather than a
+    reportable error. So the range is a business rule and storage stays
+    generous, like every other externally supplied value.
+    """
+    if record.source_type != SourceType.PDF.value:
+        return []
+    confidence = record.extraction_confidence
+    if confidence is not None and not (Decimal(0) <= confidence <= Decimal(1)):
+        return [
+            _err(
+                "extraction_confidence",
+                ErrorCode.CONFIDENCE_OUT_OF_RANGE,
+                f"Confidence must be between 0 and 1, got {confidence}.",
             )
         ]
     return []
@@ -227,6 +285,8 @@ def validate_record(
     errors += check_country(record)
     errors += check_category(record)
     errors += check_payment_method(record)
+    errors += check_field_lengths(record)
+    errors += check_confidence_range(record)
     errors += check_confidence(record, confidence_threshold)
     return errors
 

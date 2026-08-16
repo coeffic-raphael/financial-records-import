@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.db import Base, Money
+from app.db import Base, ExactDecimal
 from app.domain.enums import JobStatus, RecordStatus, SourceType
 
 
@@ -108,27 +108,42 @@ class FinancialRecord(Base):
     import_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # --- Data dictionary fields ---
-    reference: Mapped[str | None] = mapped_column(String(100))
+    # Every user-supplied column below is TEXT, not a bounded VARCHAR.
+    #
+    # A narrow column is the third form of the mistake this project keeps making:
+    # being strict about data the user controls. country VARCHAR(2) reads like
+    # careful design, but PostgreSQL would refuse to store the invalid value
+    # "LUX" -- and since the import runs in one transaction, one bad cell would
+    # lose the whole file, contradicting the requirement to import every row.
+    # SQLite ignores VARCHAR limits, so no test could have caught it.
+    #
+    # Plausibility limits live in the domain (MAX_FIELD_LENGTHS) where breaking
+    # one is a reportable business error rather than a failed INSERT.
+    reference: Mapped[str | None] = mapped_column(Text)
     # Real Date columns: normalization already turned unreadable input into
     # None, and the original string is preserved in raw_payload.
     transaction_date: Mapped[date | None] = mapped_column(Date)
     value_date: Mapped[date | None] = mapped_column(Date)
     description: Mapped[str | None] = mapped_column(Text)
-    gross_amount: Mapped[Decimal | None] = mapped_column(Money)
-    fee_amount: Mapped[Decimal | None] = mapped_column(Money)
-    tax_amount: Mapped[Decimal | None] = mapped_column(Money)
-    net_amount: Mapped[Decimal | None] = mapped_column(Money)
-    currency: Mapped[str | None] = mapped_column(String(32))
-    counterparty_name: Mapped[str | None] = mapped_column(String(300))
-    counterparty_account: Mapped[str | None] = mapped_column(String(100))
-    country: Mapped[str | None] = mapped_column(String(2))
-    category: Mapped[str | None] = mapped_column(String(64))
-    invoice_number: Mapped[str | None] = mapped_column(String(100))
-    payment_method: Mapped[str | None] = mapped_column(String(32))
+    gross_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    fee_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    tax_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    net_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    currency: Mapped[str | None] = mapped_column(Text)
+    counterparty_name: Mapped[str | None] = mapped_column(Text)
+    counterparty_account: Mapped[str | None] = mapped_column(Text)
+    country: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(Text)
+    invoice_number: Mapped[str | None] = mapped_column(Text)
+    payment_method: Mapped[str | None] = mapped_column(Text)
 
     source_type: Mapped[str] = mapped_column(String(8), nullable=False)
-    source_document_name: Mapped[str] = mapped_column(String(300), nullable=False)
-    extraction_confidence: Mapped[Decimal | None] = mapped_column(Money)
+    source_document_name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Storage stays as generous as for amounts, deliberately. A tight
+    # NUMERIC(3, 2) would not have enforced [0, 1] anyway -- it accepts 9.99 --
+    # while making 10.00 a failed INSERT instead of a reportable error. The
+    # range is a business rule; see validation.check_confidence_range.
+    extraction_confidence: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
     field_confidence: Mapped[dict | None] = mapped_column(JSON)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -173,10 +188,13 @@ class ExtractionJob(Base):
     batch_id: Mapped[str] = mapped_column(
         String(UUID_LEN), ForeignKey("import_batch.id", ondelete="CASCADE"), nullable=False
     )
-    document_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    # TEXT for the same reason as source_document_name: it carries a
+    # client-supplied filename, and a long one must not break job creation
+    # before extraction has even started.
+    document_name: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     provider: Mapped[str | None] = mapped_column(String(32))
-    model: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(Integer)

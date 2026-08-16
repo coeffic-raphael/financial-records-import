@@ -84,6 +84,8 @@ test asserts the exact set of error codes for every row.
 **Done**
 
 - Common data model, normalization and validation engine
+- Invalid values are persisted and reported, never rejected: user-supplied
+  columns are unbounded, and plausibility limits are business rules
 - CSV ingestion — every row is imported, never the whole file rejected
 - Batch and record API: create, list, filter, field-level errors, correct,
   revalidate, approve, batch summary
@@ -115,11 +117,6 @@ Deliberately out of scope here, with the approach that would be taken:
   a duplicated row instead of rejecting the file. A partial unique index
   (`WHERE reference IS NOT NULL`) plus conflict handling that marks the losing
   row NEEDS_REVIEW would reconcile the constraint with that requirement.
-- **Column widths on PostgreSQL.** Several user-supplied columns are narrow
-  (`country VARCHAR(2)`, `reference VARCHAR(100)`). SQLite ignores these limits,
-  but PostgreSQL would reject an over-long invalid value and fail the whole
-  import — contradicting the requirement to import every row. The fix is
-  generous storage plus a maximum-length validation rule; it is not applied yet.
 - **Concurrent imports into one batch.** Both the duplicate check and the
   arrival-order allocation read then write outside a lock, so two simultaneous
   imports into the same batch can miss a duplicate between them. Sequential

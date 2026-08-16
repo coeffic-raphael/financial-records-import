@@ -10,7 +10,7 @@ from sqlalchemy.types import TypeDecorator
 from app.config import get_settings
 
 
-class Money(TypeDecorator):
+class ExactDecimal(TypeDecorator):
     """Exact decimal storage on every engine.
 
     SQLite has no decimal type: a plain `Numeric` column is stored with REAL
@@ -23,29 +23,43 @@ class Money(TypeDecorator):
     Note that the PostgreSQL side is not exercised yet: it will be once a
     PostgreSQL service joins CI.
 
-    Consequence, deliberately accepted: amounts cannot be summed in SQL on
+    Consequence, deliberately accepted: values cannot be summed in SQL on
     SQLite. Batch summaries aggregate in Python instead, which is fine for the
     tens of records a batch holds. Should SQL-side aggregation ever be needed,
     integer cents would be the alternative.
+
+    Precision is a constructor argument because an amount and a confidence are
+    not the same quantity: 18/2 for money, 3/2 for a value between 0 and 1.
     """
 
-    impl = Numeric(18, 2)
+    impl = Numeric
     cache_ok = True
+
+    def __init__(self, precision: int = 18, scale: int = 2) -> None:
+        super().__init__(precision=precision, scale=scale)
+        self._precision = precision
+        self._scale = scale
 
     def load_dialect_impl(self, dialect):
         if dialect.name == "sqlite":
-            return dialect.type_descriptor(String(32))
-        return dialect.type_descriptor(Numeric(18, 2))
+            return dialect.type_descriptor(String(64))
+        return dialect.type_descriptor(Numeric(self._precision, self._scale))
 
     def process_bind_param(self, value: Decimal | None, dialect) -> object:
         if value is None:
             return None
-        return f"{value:.2f}" if dialect.name == "sqlite" else value
+        return f"{value:.{self._scale}f}" if dialect.name == "sqlite" else value
 
     def process_result_value(self, value: object, dialect) -> Decimal | None:
         if value is None:
             return None
         return Decimal(value) if dialect.name == "sqlite" else value
+
+
+# Migration 05981b87a213 refers to this type by its former name. A migration
+# that has been committed is history: it must keep running unchanged forever, so
+# the symbol it references stays available rather than the file being rewritten.
+Money = ExactDecimal
 
 
 class Base(DeclarativeBase):

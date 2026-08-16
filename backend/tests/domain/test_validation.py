@@ -121,6 +121,31 @@ class TestAmounts:
         assert result == [ErrorCode.NEGATIVE_AMOUNT, ErrorCode.NET_AMOUNT_MISMATCH]
 
 
+class TestFieldLengths:
+    """Storage is TEXT, so these are plausibility limits, not capacity limits."""
+
+    def test_over_long_value_is_reported(self):
+        assert ErrorCode.VALUE_TOO_LONG in codes(make_raw(counterparty_name="x" * 400))
+
+    def test_value_at_the_limit_is_accepted(self):
+        assert codes(make_raw(counterparty_name="x" * 300)) == []
+
+    def test_over_long_value_is_still_normalized_not_dropped(self):
+        """The record must be persistable: reporting is not rejecting."""
+        record, _ = normalize_record(make_raw(reference="R" * 200))
+        assert record.reference == "R" * 200
+
+
+class TestAmountRange:
+    def test_amount_beyond_storage_is_reported(self):
+        assert ErrorCode.AMOUNT_OUT_OF_RANGE in codes(make_raw(gross_amount="9" * 20))
+
+    def test_out_of_range_suppresses_the_net_check(self):
+        """An unusable operand cannot support an arithmetic claim."""
+        result = codes(make_raw(gross_amount="9" * 20))
+        assert ErrorCode.NET_AMOUNT_MISMATCH not in result
+
+
 class TestEnums:
     def test_unsupported_currency(self):
         assert ErrorCode.UNSUPPORTED_CURRENCY in codes(make_raw(currency="JPY"))

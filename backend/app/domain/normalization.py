@@ -16,7 +16,7 @@ raw_payload.
 import re
 from collections.abc import Mapping
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from app.domain.errors import ErrorCode, FieldError
@@ -24,6 +24,22 @@ from app.domain.record import NormalizedRecord
 
 _DECIMAL_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _THOUSANDS_GROUP_RE = re.compile(r"^\d{3}$")
+
+# Largest value the amount columns can hold: NUMERIC(18, 2) leaves 16 integer
+# digits. Beyond it PostgreSQL refuses the INSERT, which would fail the whole
+# import -- so an out-of-range amount is caught here and reported as a field
+# error, exactly like an unreadable one.
+MAX_AMOUNT = Decimal("9999999999999999.99")
+
+# Amount columns hold two decimals. Anything finer cannot be stored as written,
+# so it is REPORTED rather than quietly rounded: silently turning 0.0001 into
+# 0.00 would let a record be validated on a value the database never receives.
+AMOUNT_SCALE = 2
+
+# A group of three digits is only a thousands separator if what precedes it can
+# actually be a leading group: one to three digits with no leading zero. Without
+# this, "0.001" was read as 1.
+_THOUSANDS_LEFT_RE = re.compile(r"^-?[1-9]\d{0,2}$")
 
 AMOUNT_FIELDS = ("gross_amount", "fee_amount", "tax_amount", "net_amount")
 DATE_FIELDS = ("transaction_date", "value_date")
@@ -65,8 +81,12 @@ def normalize_country(value: Any) -> str | None:
     return text.upper() if text else None
 
 
-def normalize_amount(value: Any) -> tuple[Decimal | None, bool]:
-    """Return (amount, readable).
+def normalize_amount(value: Any) -> tuple[Decimal | None, ErrorCode | None]:
+    """Return (amount, problem) where problem is None when the value is usable.
+
+    Returning the reason rather than a boolean lets the caller distinguish
+    "this is not a number" from "this number cannot be stored", which are
+    different messages for the user.
 
     Separator rules, applied in order:
       1. strip spaces (including non-breaking ones);
@@ -85,10 +105,10 @@ def normalize_amount(value: Any) -> tuple[Decimal | None, bool]:
     defended.
     """
     if value is None:
-        return None, True
-    text = str(value).strip().replace(" ", "").replace(" ", "")
+        return None, None
+    text = str(value).strip().replace(" ", "").replace("\u00a0", "")
     if not text:
-        return None, True
+        return None, None
 
     has_dot, has_comma = "." in text, "," in text
 
@@ -98,21 +118,49 @@ def normalize_amount(value: Any) -> tuple[Decimal | None, bool]:
         text = text.replace(decimal_sep, ".")
     elif has_dot or has_comma:
         sep = "." if has_dot else ","
-        if text.count(sep) > 1 or _THOUSANDS_GROUP_RE.match(text.rsplit(sep, 1)[1]):
-            text = text.replace(sep, "")
-        else:
-            text = text.replace(sep, ".")
+        left, right = text.rsplit(sep, 1)
+        looks_like_thousands = text.count(sep) > 1 or bool(
+            _THOUSANDS_GROUP_RE.match(right) and _THOUSANDS_LEFT_RE.match(left)
+        )
+        text = text.replace(sep, "") if looks_like_thousands else text.replace(sep, ".")
 
     if not _DECIMAL_RE.match(text):
-        return None, False
+        return None, ErrorCode.NOT_NUMERIC
     try:
-        return Decimal(text), True
+        amount = Decimal(text)
     except InvalidOperation:
-        return None, False
+        return None, ErrorCode.NOT_NUMERIC
+    if -amount.as_tuple().exponent > AMOUNT_SCALE:
+        return None, ErrorCode.AMOUNT_SCALE_EXCEEDED
+    if abs(amount) > MAX_AMOUNT:
+        return None, ErrorCode.AMOUNT_OUT_OF_RANGE
+    return amount, None
 
 
-def normalize_date(value: Any) -> tuple[date | None, bool]:
-    """Return (date, readable). ISO first, then DD/MM/YYYY.
+def normalize_confidence(value: Any) -> tuple[Decimal | None, ErrorCode | None]:
+    """Return (confidence, problem).
+
+    A confidence is not an amount, and the difference matters. Rounding money
+    loses money; rounding an estimate of certainty from 0.9512 to 0.95 loses
+    nothing anyone can act on. So this one is QUANTIZED on purpose, while
+    amounts are reported and left alone.
+
+    The [0, 1] range is checked by the validation layer, not here: an
+    out-of-range confidence is a business problem, and the raw value must
+    survive to be shown.
+    """
+    parsed, problem = normalize_amount(value)
+    if problem is ErrorCode.AMOUNT_SCALE_EXCEEDED:
+        text = str(value).strip()
+        try:
+            return Decimal(text).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), None
+        except InvalidOperation:
+            return None, ErrorCode.NOT_NUMERIC
+    return parsed, problem
+
+
+def normalize_date(value: Any) -> tuple[date | None, ErrorCode | None]:
+    """Return (date, problem). ISO first, then DD/MM/YYYY.
 
     Day precedes month: this is not an arbitrary convention. The supplied bank
     statement contains 18/07/2026, 22/07/2026 and 27/07/2026 -- a first
@@ -120,18 +168,18 @@ def normalize_date(value: Any) -> tuple[date | None, bool]:
     the ambiguity by itself.
     """
     if value is None:
-        return None, True
+        return None, None
     text = str(value).strip()
     if not text:
-        return None, True
+        return None, None
     try:
-        return date.fromisoformat(text), True
+        return date.fromisoformat(text), None
     except ValueError:
         pass
     try:
-        return datetime.strptime(text, "%d/%m/%Y").date(), True
+        return datetime.strptime(text, "%d/%m/%Y").date(), None
     except ValueError:
-        return None, False
+        return None, ErrorCode.INVALID_DATE
 
 
 def normalize_record(
@@ -153,36 +201,44 @@ def normalize_record(
     values["country"] = normalize_country(raw.get("country"))
 
     for name in AMOUNT_FIELDS:
-        amount, readable = normalize_amount(raw.get(name))
+        amount, problem = normalize_amount(raw.get(name))
         values[name] = amount
-        if not readable:
+        if problem is ErrorCode.AMOUNT_OUT_OF_RANGE:
             errors.append(
                 FieldError(
                     field=name,
-                    code=ErrorCode.NOT_NUMERIC,
+                    code=problem,
+                    message=f"Amount exceeds the storable range: {raw.get(name)!r}",
+                )
+            )
+        elif problem is not None:
+            errors.append(
+                FieldError(
+                    field=name,
+                    code=problem,
                     message=f"Not a numeric value: {raw.get(name)!r}",
                 )
             )
 
     for name in DATE_FIELDS:
-        parsed, readable = normalize_date(raw.get(name))
+        parsed, problem = normalize_date(raw.get(name))
         values[name] = parsed
-        if not readable:
+        if problem is not None:
             errors.append(
                 FieldError(
                     field=name,
-                    code=ErrorCode.INVALID_DATE,
+                    code=problem,
                     message=f"Unreadable date: {raw.get(name)!r}",
                 )
             )
 
-    confidence, confidence_readable = normalize_amount(raw.get("extraction_confidence"))
-    if not confidence_readable:
+    confidence, confidence_problem = normalize_confidence(raw.get("extraction_confidence"))
+    if confidence_problem is not None:
         errors.append(
             FieldError(
                 field="extraction_confidence",
-                code=ErrorCode.NOT_NUMERIC,
-                message=f"Confidence is not numeric: {raw.get('extraction_confidence')!r}",
+                code=confidence_problem,
+                message=f"Confidence is not usable: {raw.get('extraction_confidence')!r}",
             )
         )
 
