@@ -92,7 +92,7 @@ class RecordOut(BaseModel):
     source_type: str
     source_document_name: str
     extraction_confidence: Money
-    field_confidence: dict | None
+    field_confidence: dict[str, float] | None
 
     status: str
     validation_errors: list[ValidationErrorOut]
@@ -137,6 +137,30 @@ class ImportResult(BaseModel):
     document_name: str
     imported: int
     by_status: dict[str, int]
+
+
+class ExtractionJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    batch_id: str
+    document_name: str
+    status: str
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    duration_ms: int | None
+    record_count: int | None
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExtractionAccepted(BaseModel):
+    """Answer to a PDF upload: the work has been queued, not done."""
+
+    jobs: list[ExtractionJobOut]
 
 
 class CurrencyTotal(BaseModel):

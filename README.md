@@ -31,6 +31,66 @@ Two consequences this design is built for:
   correction is merged into the stored raw payload and revalidated through the
   identical code, so the import path and the correction path cannot drift apart.
 
+## AI provider
+
+PDF content is extracted by a language model and converted into the same
+normalized records a CSV produces.
+
+**Google Gemini** is the primary provider, for three reasons: it reads PDFs
+natively so no page-to-image conversion is needed, it constrains the response to
+a JSON schema server-side rather than merely asking for one in the prompt, and
+its free tier makes iterating during development free.
+
+**OpenAI** is configured as the second link of a fallback chain. When both keys
+are present, a transient failure on the primary falls through instead of failing
+the extraction. A permanent failure — bad key, unknown model — is never retried,
+since retrying cannot help and only delays the fallback.
+
+**Mock** keeps the application fully usable with no credentials at all, and is
+what the test suite uses.
+
+### Configuration
+
+```bash
+EXTRACTION_PROVIDER=gemini      # gemini | openai | mock
+GEMINI_API_KEY=...
+OPENAI_API_KEY=...              # optional; enables the fallback chain
+```
+
+The full list is in [`backend/.env.example`](backend/.env.example). No provider
+key may ever carry a `VITE_` prefix: those are compiled into the browser bundle.
+Extraction is server-side only, and the frontend never learns which provider is
+used.
+
+### What the model is told, and what it is not trusted with
+
+The prompt states five constraints drawn from the supplied documents — most
+importantly **never invent a value**: an absent field must come back as `null`
+with confidence 0. On the bank statement it must take the per-line `Amount` and
+never the running `Balance`, the two being adjacent numeric columns.
+
+Nothing the model returns is trusted. The response is validated against a
+structural schema **before anything reaches the database**, and every field is
+optional in that schema: whether a field is required is a business rule, so it
+belongs to the domain. An incomplete extraction therefore produces a
+`NEEDS_REVIEW` record rather than a parse failure.
+
+Confidence is reported per field and aggregated to the **minimum** across
+required fields — a record is only as trustworthy as its least certain required
+value.
+
+### Processing
+
+Uploading PDFs returns **202** immediately with one job per file; extraction
+runs in the background and the client follows progress on
+`GET /api/batches/{id}/jobs`.
+
+Two limits are enforced rather than declared. Uploads are read in chunks and
+refused the moment they exceed the size limit, so an oversized file never
+becomes resident. Extraction concurrency is capped, because provider quotas are
+counted in requests per minute — which also caps how many documents are in
+memory at once, since each is read only once its turn comes.
+
 ## Requirements
 
 - Python 3.11+
@@ -63,11 +123,14 @@ Interactive API documentation is generated at <http://localhost:8000/docs>.
 .venv/bin/pytest
 ```
 
-The suite is **hermetic**: no network, no API key, no external service. Tests
-that call a real AI provider are marked `live` and skipped automatically.
+The suite is **hermetic**: no network, no API key, no external service, and no
+billable API call. Tests that talk to a real provider are excluded by default,
+not merely marked — a mark enables selection, it does not deselect.
+
+Run them deliberately, with a key configured:
 
 ```bash
-.venv/bin/pytest -m "not live"
+.venv/bin/pytest -m live
 ```
 
 ## Sample files
@@ -92,11 +155,12 @@ test asserts the exact set of error codes for every row.
 - Tenant scoping on every query, with cross-tenant access returning `404`
 - Alembic migrations, applied by the test suite from an empty database (SQLite;
   PostgreSQL portability is claimed, not yet verified in CI)
-- CI: lint, tests, secret scanning
+- PDF extraction through Gemini, with an OpenAI fallback, per-field confidence,
+  token accounting and background processing
+- CI: lint, tests on three Python versions, migration drift, secret scanning
 
 **Not yet**
 
-- PDF extraction through an AI provider
 - Authentication
 - Frontend
 - Docker Compose

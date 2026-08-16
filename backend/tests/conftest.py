@@ -18,11 +18,13 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, delete
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.db import create_app_engine, get_session
+from app.api.deps import get_extraction_provider
+from app.db import create_app_engine, get_session, get_session_factory
 from app.main import create_app
 from app.models import ExtractionJob, FinancialRecord, ImportBatch, Tenant
+from app.services.pdf_extraction import reset_semaphore
 from tests.factories import VALID_RAW
 
 BACKEND_ROOT = Path(__file__).parents[1]
@@ -44,6 +46,14 @@ def engine(database_url: str) -> Engine:
 
 
 @pytest.fixture(autouse=True)
+def isolated_semaphore() -> Iterator[None]:
+    """Each test gets a fresh concurrency limiter."""
+    reset_semaphore()
+    yield
+    reset_semaphore()
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(engine: Engine) -> Iterator[None]:
     """Every test starts from an empty database, in dependency order."""
     yield
@@ -59,8 +69,7 @@ def session(engine: Engine) -> Iterator[Session]:
         yield db_session
 
 
-@pytest.fixture
-def client(engine: Engine) -> Iterator[TestClient]:
+def _build_client(engine: Engine, provider=None) -> TestClient:
     app = create_app()
 
     def _session_override() -> Iterator[Session]:
@@ -71,8 +80,41 @@ def client(engine: Engine) -> Iterator[TestClient]:
             db_session.close()
 
     app.dependency_overrides[get_session] = _session_override
-    with TestClient(app) as test_client:
+    # Background tasks open their own session; without this override they would
+    # write to the development database instead of the test one.
+    app.dependency_overrides[get_session_factory] = lambda: sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False
+    )
+    if provider is not None:
+        app.dependency_overrides[get_extraction_provider] = lambda: provider
+    return TestClient(app)
+
+
+@pytest.fixture
+def client(engine: Engine) -> Iterator[TestClient]:
+    with _build_client(engine) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def client_with_provider(engine: Engine):
+    """Build a client whose extraction provider is a double.
+
+    No test ever reaches the network: the provider is substituted at the
+    dependency, which is also how a different provider would be wired in
+    production.
+    """
+    clients: list[TestClient] = []
+
+    def _make(provider) -> TestClient:
+        test_client = _build_client(engine, provider)
+        test_client.__enter__()
+        clients.append(test_client)
+        return test_client
+
+    yield _make
+    for test_client in clients:
+        test_client.__exit__(None, None, None)
 
 
 @pytest.fixture

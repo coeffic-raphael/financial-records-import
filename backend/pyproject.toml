@@ -17,7 +17,10 @@ known-third-party = ["alembic"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Live tests are excluded by DEFAULT, not merely marked. A bare `pytest` is what
+# the README tells a reviewer to run, so it must never reach the network or
+# spend money on an API call. Run them deliberately with: pytest -m live
+addopts = "-q -m 'not live'"
 markers = [
     "live: performs a real AI provider call; skipped automatically without an API key",
 ]

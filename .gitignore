@@ -31,3 +31,7 @@ uploads/
 # Working plans — internal, not part of the delivered repository
 docs/plans/
 docs/reviews/
+
+# SQLite write-ahead log sidecars
+*.db-wal
+*.db-shm

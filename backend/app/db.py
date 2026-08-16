@@ -95,6 +95,18 @@ engine = create_app_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+def get_session_factory() -> sessionmaker:
+    """The factory background tasks use to open their own session.
+
+    A background task cannot reuse the request session -- it is closed once the
+    response is sent -- so it must build one. Reaching for the module-level
+    SessionLocal directly would hard-wire it to whatever engine the process
+    started with, which is invisible until something needs a different one: a
+    test would then silently write to the development database.
+    """
+    return SessionLocal
+
+
 def get_session() -> Iterator[Session]:
     session = SessionLocal()
     try:

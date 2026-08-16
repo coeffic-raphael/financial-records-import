@@ -8,18 +8,34 @@ Until then the application behaves as honest single-tenant, with the extension
 point visible rather than a half-wired feature.
 """
 
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.db import get_session
+from app.config import get_settings
+from app.db import get_session, get_session_factory
 from app.models import Tenant
+from app.providers.base import ExtractionProvider
+from app.providers.registry import build_provider
 
 DEFAULT_TENANT_NAME = "Demo Tenant A"
 
+
+@lru_cache
+def _cached_provider() -> ExtractionProvider:
+    """Built once: each provider holds a lazily created SDK client."""
+    return build_provider(get_settings())
+
+
+def get_extraction_provider() -> ExtractionProvider:
+    """Dependency so tests can substitute a double without touching the network."""
+    return _cached_provider()
+
 SessionDep = Annotated[Session, Depends(get_session)]
+SessionFactoryDep = Annotated[sessionmaker, Depends(get_session_factory)]
 
 
 def current_tenant(session: SessionDep) -> Tenant:

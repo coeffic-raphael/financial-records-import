@@ -20,7 +20,23 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:5173"
 
     max_upload_bytes: int = 10 * 1024 * 1024
+
+    # --- AI extraction ---
+    # None of these may carry a VITE_ prefix: any VITE_* variable is compiled
+    # into the browser bundle. Extraction is server-side only; the frontend
+    # never learns which provider is used.
+    extraction_provider: str = "gemini"
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
+    openai_model: str = "gpt-5.6"
+    extraction_timeout_seconds: float = 60.0
     extraction_confidence_threshold: Decimal = Decimal("0.70")
+
+    # The thread pool would happily run dozens of extractions at once, but free
+    # provider quotas are counted in requests per minute. The slowest component
+    # sets the limit, not the fastest.
+    max_concurrent_extractions: int = 3
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -28,7 +44,12 @@ class Settings(BaseSettings):
 
     def __repr__(self) -> str:
         """Never reveal secrets through an accidental print or log line."""
-        return f"Settings(database_url={self._mask(self.database_url)!r}, ...)"
+        return (
+            f"Settings(database_url={self._mask(self.database_url)!r}, "
+            f"extraction_provider={self.extraction_provider!r}, "
+            f"gemini_api_key={'set' if self.gemini_api_key else 'unset'}, "
+            f"openai_api_key={'set' if self.openai_api_key else 'unset'})"
+        )
 
     @staticmethod
     def _mask(value: str) -> str:

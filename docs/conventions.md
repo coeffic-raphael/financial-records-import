@@ -155,7 +155,7 @@ router  (api/)      HTTP only: parsing, status codes, DTOs
    │                no business rule, no SQL query
    ▼
 service (services/) orchestration + transaction boundary
-   │                owns the session, calls the domain
+   │                owns the session AND its commit, calls the domain
    ▼
 domain  (domain/)   pure functions: normalization, validation
                     no session, no SQLAlchemy import
@@ -164,6 +164,12 @@ domain  (domain/)   pure functions: normalization, validation
 **No generic Repository layer.** The SQLAlchemy session *is* the repository;
 adding one on top is an abstraction with no use here, and one more thing to
 defend.
+
+**Only the outermost service commits.** A helper that persists rows flushes and
+returns; it never commits. This is not tidiness — it is what lets one caller
+write records and a job outcome in a SINGLE transaction. Two commits leave a
+window where the records exist under a job still claiming to be running, and
+nothing reconciles that afterwards.
 
 ### 3.3 Routers
 
@@ -216,8 +222,14 @@ require_authenticated_tenant
       └─▶ get_current_tenant : reads tenant_id from the token, never from the request
 ```
 
-Extra safety net: the cross-tenant test matrix is parametrised over the list of
-routes, so it fails if an unscoped route appears.
+What actually guards scoping is the cross-tenant test matrix, and it
+**discovers** its routes from the published OpenAPI schema rather than from a
+hand-written list. A list only protects the routes someone remembered to add to
+it, which is the exact failure it exists to prevent. Every route carrying a
+resource id is called with another tenant's identifier and must answer 404.
+
+This has been verified the only way that means anything: by adding an unscoped
+route and watching the suite fail on it.
 
 ---
 
@@ -294,10 +306,13 @@ development, `Secure=True` everywhere else, with `httpOnly` and
 
 | Topic | Rule |
 |---|---|
-| Uploads | Maximum size, real type verified (not just the declared `Content-Type`), **sanitised filename** before persistence and display, storage outside any served directory |
+| Uploads | Read in **chunks**, refused as soon as the size limit is crossed. Reading the whole body then measuring it makes the limit functional, not a memory bound |
+| Upload type | The real signature is checked, never the declared `Content-Type`, which is client-supplied and therefore not evidence |
+| Upload filename | **Sanitised** before persistence and display; stored as data, never used to build a filesystem path |
+| Upload storage | Spooled to a temporary file the background task owns and deletes; documents resident in memory are then bounded by the concurrency limit, not by uploads in flight |
 | CORS | **Explicit** origin list. With credentials, browsers forbid `*` — this is not optional |
 | Caching | `Cache-Control: no-store` on every authenticated response |
-| Another tenant's resource | **`404`, never `403`** — a 403 would confirm the resource exists |
+| Another tenant's resource | **`404`, never `403`** — a 403 would confirm the resource exists. Asserted for every id-bearing route, discovered from OpenAPI |
 | Logs | Provider, model, duration, tokens, outcome. **Never document content**: this is personally identifiable financial data |
 
 ---

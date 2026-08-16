@@ -6,17 +6,35 @@ skip tenant scoping -- that would require moving it to the public router
 deliberately.
 """
 
+import tempfile
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
 from sqlalchemy import select
 
-from app.api.deps import SessionDep, TenantDep, current_tenant
+from app.api.deps import (
+    SessionDep,
+    SessionFactoryDep,
+    TenantDep,
+    current_tenant,
+    get_extraction_provider,
+)
 from app.api.errors import APIError, not_found
 from app.config import get_settings
-from app.models import FinancialRecord, ImportBatch
-from app.schemas import BatchCreate, BatchOut, BatchSummary, ImportResult, RecordOut
+from app.models import ExtractionJob, FinancialRecord, ImportBatch
+from app.providers.base import ExtractionProvider
+from app.schemas import (
+    BatchCreate,
+    BatchOut,
+    BatchSummary,
+    ExtractionAccepted,
+    ExtractionJobOut,
+    ImportResult,
+    RecordOut,
+)
 from app.services.csv_import import import_csv
+from app.services.pdf_extraction import create_jobs, run_extraction
 from app.services.summary import build_summary
 
 router = APIRouter(
@@ -24,6 +42,74 @@ router = APIRouter(
     tags=["batches"],
     dependencies=[Depends(current_tenant)],
 )
+
+
+def _safe_filename(raw: str | None, fallback: str) -> str:
+    """Keep the base name only.
+
+    A client-supplied filename is data, never a path: it is stored and displayed
+    but never used to build a filesystem location. Control characters are
+    stripped so the value cannot disturb a log line or a terminal.
+    """
+    name = (raw or fallback).replace("\\", "/").split("/")[-1]
+    name = "".join(character for character in name if character.isprintable())
+    return name.strip() or fallback
+
+
+PDF_MAGIC = b"%PDF"
+UPLOAD_CHUNK_BYTES = 64 * 1024
+
+
+async def _spool_upload(upload: UploadFile, max_bytes: int, fallback: str) -> tuple[str, Path]:
+    """Stream an upload to disk, refusing it as soon as it is too large.
+
+    Reading the whole body and then measuring it makes the size limit a
+    FUNCTIONAL limit, not a memory one: an 11 MB file is fully resident before
+    being rejected, and several uploads in one request multiply that. Reading in
+    chunks and stopping at the threshold means an oversized upload never
+    occupies more than one chunk.
+
+    The content goes to a temporary file because the background task needs it
+    after the response has been sent, by which point the request's own upload
+    object is closed. The task deletes it when it is done.
+    """
+    filename = _safe_filename(upload.filename, fallback)
+    handle = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")  # noqa: SIM115
+    path = Path(handle.name)
+    total = 0
+    head = b""
+
+    try:
+        while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+            total += len(chunk)
+            if total > max_bytes:
+                raise APIError(
+                    status.HTTP_413_CONTENT_TOO_LARGE,
+                    "FILE_TOO_LARGE",
+                    "The uploaded file exceeds the maximum allowed size.",
+                    {"filename": filename, "max_bytes": max_bytes},
+                )
+            if len(head) < len(PDF_MAGIC):
+                head += chunk[: len(PDF_MAGIC) - len(head)]
+            handle.write(chunk)
+
+        # The declared Content-Type is client-supplied and therefore not
+        # evidence. Checking the real signature costs four bytes and stops a
+        # mislabelled file from reaching a paid API only to fail there.
+        if not head.startswith(PDF_MAGIC):
+            raise APIError(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "NOT_A_PDF",
+                "The uploaded file is not a PDF document.",
+                {"filename": filename},
+            )
+    except BaseException:
+        handle.close()
+        path.unlink(missing_ok=True)
+        raise
+
+    handle.close()
+    return filename, path
 
 
 def _get_batch(session, batch_id: str, tenant_id: str) -> ImportBatch:
@@ -83,13 +169,76 @@ async def upload_csv(
             {"max_bytes": settings.max_upload_bytes},
         )
 
-    # The client-supplied filename is never trusted as a path: only its base
-    # name is kept, and it is stored as data, never used to build a filesystem
-    # location.
-    filename = (file.filename or "upload.csv").replace("\\", "/").split("/")[-1]
+    filename = _safe_filename(file.filename, "upload.csv")
 
     return import_csv(
         session, batch, filename, content, settings.extraction_confidence_threshold
+    )
+
+
+@router.post(
+    "/{batch_id}/uploads/pdf",
+    response_model=ExtractionAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def upload_pdfs(
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+    files: Annotated[list[UploadFile], File()],
+    session: SessionDep,
+    tenant: TenantDep,
+    provider: Annotated[ExtractionProvider, Depends(get_extraction_provider)],
+    session_factory: SessionFactoryDep,
+) -> ExtractionAccepted:
+    """Accept one or more PDFs and answer immediately.
+
+    202, not 201: nothing has been extracted yet. An invoice takes seconds and a
+    statement longer, so holding the request open would leave the interface
+    frozen and risk a proxy timeout. The client follows progress through the
+    returned jobs.
+    """
+    batch = _get_batch(session, batch_id, tenant.id)
+    settings = get_settings()
+
+    # EVERY file is validated before ANY job is created. Validating as we go
+    # would mean a rejected third file leaves the first two already queued: the
+    # client receives an error while work is under way, which is the worst of
+    # both answers. Any file already spooled is removed if a later one fails.
+    spooled: list[tuple[str, Path]] = []
+    try:
+        for upload in files:
+            spooled.append(
+                await _spool_upload(upload, settings.max_upload_bytes, "document.pdf")
+            )
+    except BaseException:
+        for _, path in spooled:
+            path.unlink(missing_ok=True)
+        raise
+
+    # One transaction for every job, so a failure part-way cannot leave a job
+    # persisted as PENDING with no task ever queued for it.
+    jobs = create_jobs(session, batch, [name for name, _ in spooled])
+
+    for job, (filename, path) in zip(jobs, spooled, strict=True):
+        # Queued rather than awaited; the task opens its own session, reads the
+        # spooled file and deletes it.
+        background_tasks.add_task(
+            run_extraction, job.id, path, filename, provider, session_factory
+        )
+
+    return ExtractionAccepted(jobs=[ExtractionJobOut.model_validate(job) for job in jobs])
+
+
+@router.get("/{batch_id}/jobs", response_model=list[ExtractionJobOut])
+def list_jobs(batch_id: str, session: SessionDep, tenant: TenantDep) -> list[ExtractionJob]:
+    """Extraction state for this batch. Polled by the frontend until settled."""
+    batch = _get_batch(session, batch_id, tenant.id)
+    return list(
+        session.scalars(
+            select(ExtractionJob)
+            .where(ExtractionJob.batch_id == batch.id)
+            .order_by(ExtractionJob.created_at)
+        )
     )
 
 

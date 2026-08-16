@@ -14,11 +14,9 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.api.errors import APIError
-from app.domain.normalization import normalize_record
-from app.domain.validation import derive_status, validate_record
-from app.models import FinancialRecord, ImportBatch
+from app.models import ImportBatch
 from app.schemas import ImportResult
-from app.services.records import next_import_sequence, references_before
+from app.services.ingestion import persist_records
 
 # A missing optional column (fee_amount, invoice_number...) is harmless: the
 # domain defaults it. Only columns required by the data dictionary make the
@@ -66,61 +64,16 @@ def import_csv(
             {"missing_columns": sorted(missing)},
         )
 
-    # Uniqueness is scoped to the BATCH, not to the file. Seeding from what the
-    # batch already holds is what makes a reference imported by an earlier
-    # upload visible to a later one; starting from an empty set would silently
-    # let the same reference through twice.
-    sequence = next_import_sequence(session, batch.id)
-    seen = references_before(session, batch.id, sequence)
-    by_status: dict[str, int] = {}
-    imported = 0
-
-    for raw in reader:
-        normalized, form_errors = normalize_record(
-            raw, source_type="CSV", source_document_name=filename
-        )
-        errors = validate_record(
-            normalized,
-            form_errors,
-            existing_references=seen,
-            confidence_threshold=confidence_threshold,
-        )
-        record_status = derive_status(errors).value
-
-        record = FinancialRecord(
-            batch_id=batch.id,
-            import_sequence=sequence,
-            source_type="CSV",
-            source_document_name=filename,
-            status=record_status,
-            validation_errors=[error.as_dict() for error in errors],
-            raw_payload=dict(raw),
-        )
-        for name in (
-            "reference",
-            "transaction_date",
-            "value_date",
-            "description",
-            "gross_amount",
-            "fee_amount",
-            "tax_amount",
-            "net_amount",
-            "currency",
-            "counterparty_name",
-            "counterparty_account",
-            "country",
-            "category",
-            "invoice_number",
-            "payment_method",
-        ):
-            setattr(record, name, getattr(normalized, name))
-
-        session.add(record)
-        if normalized.reference:
-            seen = seen | {normalized.reference}
-        sequence += 1
-        by_status[record_status] = by_status.get(record_status, 0) + 1
-        imported += 1
-
+    rows = list(reader)
+    by_status = persist_records(
+        session,
+        batch,
+        rows,
+        source_type="CSV",
+        document_name=filename,
+        confidence_threshold=confidence_threshold,
+    )
+    # The service owns the transaction: one commit for the whole file, so a
+    # failure part-way leaves nothing behind.
     session.commit()
-    return ImportResult(document_name=filename, imported=imported, by_status=by_status)
+    return ImportResult(document_name=filename, imported=len(rows), by_status=by_status)

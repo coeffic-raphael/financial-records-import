@@ -22,3 +22,8 @@ python-multipart==0.0.32
 # extensions, which makes a reviewer's install slower and more fragile for no
 # gain that matters here.
 uvicorn==0.52.3
+
+# AI providers. Both are imported lazily, so the application starts and serves
+# every non-extraction endpoint even with no credentials configured.
+google-genai==2.18.1
+openai==3.1.0
