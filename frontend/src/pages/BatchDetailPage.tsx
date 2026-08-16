@@ -19,26 +19,34 @@ export function BatchDetailPage() {
   const summary = useSummary(batchId);
   const jobs = useJobs(batchId);
 
-  if (batch.isLoading) return <Spinner label="Loading…" />;
+  if (batch.isLoading) return <Spinner label="Loading batch…" />;
   if (batch.isError) return <ErrorNotice message="This batch is not available." />;
 
   return (
     <div className="space-y-6">
       <div>
-        <Link to="/batches" className="text-sm text-slate-500 hover:underline">
+        <Link
+          to="/batches"
+          className="text-sm text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline"
+        >
           ← All batches
         </Link>
-        <h1 className="text-lg font-semibold text-slate-900">{batch.data?.name}</h1>
+        <h1 className="mt-1 text-lg font-semibold tracking-tight text-slate-900">
+          {batch.data?.name}
+        </h1>
       </div>
 
       <UploadPanel batchId={batchId} />
       {jobs.data && <ExtractionJobList jobs={jobs.data} />}
       {summary.data && <BatchSummaryPanel summary={summary.data} />}
 
-      <RecordFilters filters={filters} onChange={setFilters} />
-
-      <Panel title="Records">
-        {records.isLoading && <Spinner label="Loading…" />}
+      <Panel
+        title="Records"
+        actions={
+          <RecordFilters filters={filters} onChange={setFilters} count={records.data?.length} />
+        }
+      >
+        {records.isLoading && <Spinner label="Loading records…" />}
         {records.isError && <ErrorNotice message="Could not load records." />}
         {records.data && <RecordTable records={records.data} />}
       </Panel>

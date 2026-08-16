@@ -80,6 +80,7 @@ export interface BatchSummary {
 export interface User {
   id: string;
   email: string;
+  name: string;
   tenant_id: string;
 }
 

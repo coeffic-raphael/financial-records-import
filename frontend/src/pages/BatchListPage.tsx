@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { Button, ErrorNotice, Panel, Spinner } from "../components/ui";
+import { Button, EmptyState, ErrorNotice, Panel, Spinner, TextInput } from "../components/ui";
 import { useBatches, useCreateBatch } from "../hooks/useApi";
 
 export function BatchListPage() {
@@ -11,7 +11,14 @@ export function BatchListPage() {
 
   return (
     <div className="space-y-6">
-      <Panel title="New import batch">
+      <div>
+        <h1 className="text-lg font-semibold tracking-tight text-slate-900">Import batches</h1>
+        <p className="mt-0.5 text-sm text-slate-500">
+          A batch groups the documents imported together and the records they produced.
+        </p>
+      </div>
+
+      <Panel title="New batch">
         <form
           className="flex gap-2"
           onSubmit={(event) => {
@@ -20,13 +27,12 @@ export function BatchListPage() {
             create.mutate(name, { onSuccess: () => setName("") });
           }}
         >
-          <input
+          <TextInput
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="July 2026"
-            className="flex-1 rounded border border-slate-300 px-3 py-1.5 text-sm"
           />
-          <Button type="submit" disabled={create.isPending}>
+          <Button type="submit" disabled={create.isPending || !name.trim()}>
             Create
           </Button>
         </form>
@@ -34,26 +40,28 @@ export function BatchListPage() {
       </Panel>
 
       <Panel title="Batches">
-        {batches.isLoading && <Spinner label="Loading…" />}
+        {batches.isLoading && <Spinner label="Loading batches…" />}
         {batches.isError && <ErrorNotice message="Could not load batches." />}
         {batches.data?.length === 0 && (
-          <p className="text-sm text-slate-500">No batch yet. Create one above.</p>
+          <EmptyState title="No batch yet" hint="Create one above, then upload a CSV or PDFs." />
         )}
-        <ul className="divide-y divide-slate-100">
-          {batches.data?.map((batch) => (
-            <li key={batch.id} className="py-2">
-              <Link
-                to={`/batches/${batch.id}`}
-                className="flex items-center justify-between text-sm hover:underline"
-              >
-                <span className="font-medium text-slate-800">{batch.name}</span>
-                <span className="text-slate-400">
-                  {new Date(batch.created_at).toLocaleString()}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        {batches.data && batches.data.length > 0 && (
+          <ul className="-m-4 divide-y divide-slate-100">
+            {batches.data.map((batch) => (
+              <li key={batch.id}>
+                <Link
+                  to={`/batches/${batch.id}`}
+                  className="flex items-center justify-between px-4 py-3 transition hover:bg-slate-50"
+                >
+                  <span className="text-sm font-medium text-slate-800">{batch.name}</span>
+                  <span className="text-xs tabular-nums text-slate-400">
+                    {new Date(batch.created_at).toLocaleString()}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </Panel>
     </div>
   );

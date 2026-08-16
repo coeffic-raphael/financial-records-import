@@ -18,8 +18,8 @@ export async function signIn(email: string, password: string): Promise<void> {
   useAuthStore.getState().signIn(session);
 }
 
-export async function signUp(email: string, password: string): Promise<void> {
-  const session = await api.post<Session>("/api/auth/register", { email, password });
+export async function signUp(email: string, name: string, password: string): Promise<void> {
+  const session = await api.post<Session>("/api/auth/register", { email, name, password });
   useAuthStore.getState().signIn(session);
 }
 

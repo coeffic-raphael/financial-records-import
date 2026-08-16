@@ -26,7 +26,7 @@ from tests.conftest import TEST_PASSWORD
 @pytest.fixture
 def user_and_token(session) -> tuple[User, str]:
     """An account with one live refresh token."""
-    user = register(session, "rotator@example.com", TEST_PASSWORD)
+    user = register(session, "rotator@example.com", TEST_PASSWORD, "Rotator")
     _, refresh = issue_session(session, user, get_settings())
     return user, refresh
 
@@ -114,19 +114,19 @@ class TestConcurrentRegistration:
         """The unique constraint decides. A prior SELECT leaves a window where
         both callers pass the check and the loser gets a 500."""
         with Session(engine) as first, Session(engine) as second:
-            register(first, "duplicate@example.com", TEST_PASSWORD)
+            register(first, "duplicate@example.com", TEST_PASSWORD, "First")
 
             with pytest.raises(APIError) as raised:
-                register(second, "duplicate@example.com", TEST_PASSWORD)
+                register(second, "duplicate@example.com", TEST_PASSWORD, "Second")
 
         assert raised.value.status_code == 409
         assert raised.value.code == "EMAIL_TAKEN"
 
     def test_only_one_account_exists_afterwards(self, engine, session):
         with Session(engine) as first, Session(engine) as second:
-            register(first, "duplicate@example.com", TEST_PASSWORD)
+            register(first, "duplicate@example.com", TEST_PASSWORD, "First")
             with pytest.raises(APIError):
-                register(second, "duplicate@example.com", TEST_PASSWORD)
+                register(second, "duplicate@example.com", TEST_PASSWORD, "Second")
 
         session.expire_all()
         users = session.scalars(
@@ -140,9 +140,9 @@ class TestConcurrentRegistration:
         from app.models import Tenant
 
         with Session(engine) as first, Session(engine) as second:
-            register(first, "duplicate@example.com", TEST_PASSWORD)
+            register(first, "duplicate@example.com", TEST_PASSWORD, "First")
             with pytest.raises(APIError):
-                register(second, "duplicate@example.com", TEST_PASSWORD)
+                register(second, "duplicate@example.com", TEST_PASSWORD, "Second")
 
         session.expire_all()
         tenants = session.scalars(select(Tenant)).all()

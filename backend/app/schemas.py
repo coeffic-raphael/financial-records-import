@@ -58,6 +58,7 @@ class ValidationErrorOut(BaseModel):
 class RegisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: EmailStr
+    name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=1)
 
 
@@ -73,6 +74,7 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     email: str
+    name: str
     tenant_id: str
 
 

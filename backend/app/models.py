@@ -62,6 +62,10 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(UUID_LEN), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
 
+    # TEXT like every other user-supplied value: a display name has no natural
+    # length, and a narrow column would refuse a long one instead of reporting it.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+
     # Never the password itself, and never returned by any schema: no response
     # DTO exposes this column.
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)

@@ -30,20 +30,27 @@ def _invalid_credentials() -> APIError:
     )
 
 
-def register(session: Session, email: str, password: str) -> User:
+def register(session: Session, email: str, password: str, name: str) -> User:
     """Create a user and the tenant that belongs to them."""
     email = email.strip().lower()
+    name = name.strip()
+    if not name:
+        raise APIError(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "NAME_REQUIRED", "A name is required."
+        )
     if len(password) < MIN_PASSWORD_LENGTH:
         raise APIError(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "WEAK_PASSWORD",
             f"The password must be at least {MIN_PASSWORD_LENGTH} characters long.",
         )
-    tenant = Tenant(name=f"{email} workspace")
+    tenant = Tenant(name=f"{name}'s workspace")
     session.add(tenant)
     session.flush()
 
-    user = User(email=email, password_hash=hash_password(password), tenant_id=tenant.id)
+    user = User(
+        email=email, name=name, password_hash=hash_password(password), tenant_id=tenant.id
+    )
     session.add(user)
 
     # The unique constraint decides, not a prior SELECT. Checking first and then

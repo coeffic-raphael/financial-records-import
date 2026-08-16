@@ -57,7 +57,7 @@ def _session_response(access_token: str, refresh_token: str, user: User) -> JSON
 @public_router.post("/register", status_code=status.HTTP_201_CREATED, response_model=SessionOut)
 def register_user(payload: RegisterRequest, session: SessionDep) -> JSONResponse:
     """Create an account and its workspace, then sign in immediately."""
-    user = register(session, payload.email, payload.password)
+    user = register(session, payload.email, payload.password, payload.name)
     access, refresh = issue_session(session, user, get_settings())
     response = _session_response(access, refresh, user)
     response.status_code = status.HTTP_201_CREATED

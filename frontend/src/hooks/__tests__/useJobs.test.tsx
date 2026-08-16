@@ -51,7 +51,7 @@ beforeEach(() => {
   });
   invalidateSpy = vi.spyOn(client, "invalidateQueries");
   useAuthStore.setState({
-    user: { id: "u1", email: "a@example.com", tenant_id: "t1" },
+    user: { id: "u1", email: "a@example.com", name: "Alice Martin", tenant_id: "t1" },
     accessToken: "token",
   });
 });

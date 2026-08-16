@@ -13,10 +13,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.errors import APIError, not_found
-from app.domain.enums import RecordStatus
+from app.domain.enums import RecordStatus, SourceType
 from app.domain.normalization import normalize_record
 from app.domain.validation import derive_status, validate_record
 from app.models import FinancialRecord, ImportBatch
+from app.providers.schema import record_confidence
 from app.schemas import BUSINESS_FIELDS
 
 
@@ -139,7 +140,37 @@ def apply_correction(
     payload = dict(record.raw_payload)
     payload.update({key: value for key, value in changes.items()})
     record.raw_payload = payload
+    _account_for_human_review(record, changes)
     return revalidate_record(session, record, confidence_threshold)
+
+
+def _account_for_human_review(record: FinancialRecord, changes: dict[str, str | None]) -> None:
+    """A value a person typed is no longer something the model was unsure about.
+
+    Extraction confidence describes THE EXTRACTION, not the data as it stands.
+    Leaving it untouched after a correction made the workflow a dead end: the
+    eight statement lines the model could not complete kept LOW_CONFIDENCE
+    forever, so filling in every missing field still left them NEEDS_REVIEW and
+    they could never be approved.
+
+    Each corrected field therefore becomes certain, and the aggregate is
+    recomputed from what remains model-sourced. A field the model was unsure
+    about and nobody touched still blocks approval, which is the point.
+    """
+    if record.source_type != SourceType.PDF.value or not changes:
+        return
+
+    scores = dict(record.field_confidence or {})
+    if not scores:
+        return
+
+    for field in changes:
+        if field in scores:
+            scores[field] = 1.0
+
+    record.field_confidence = scores
+    aggregate = f"{record_confidence(scores):.2f}"
+    record.raw_payload = {**record.raw_payload, "extraction_confidence": aggregate}
 
 
 def approve_record(session: Session, record: FinancialRecord) -> FinancialRecord:

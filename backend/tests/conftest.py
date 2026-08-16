@@ -107,10 +107,12 @@ def authenticate(test_client: TestClient, email: str = OWNER_EMAIL) -> TestClien
     another uploading into it must be the same tenant, or the isolation rules
     correctly refuse them.
     """
-    credentials = {"email": email, "password": TEST_PASSWORD}
+    credentials = {"email": email, "name": "Test Owner", "password": TEST_PASSWORD}
     response = test_client.post("/api/auth/register", json=credentials)
     if response.status_code == 409:
-        response = test_client.post("/api/auth/login", json=credentials)
+        response = test_client.post(
+            "/api/auth/login", json={"email": email, "password": TEST_PASSWORD}
+        )
     assert response.status_code in (200, 201), response.text
 
     test_client.headers["Authorization"] = f"Bearer {response.json()['access_token']}"

@@ -6,7 +6,14 @@ from app.models import RefreshToken, User
 from app.security.passwords import hash_password, verify_password
 from tests.conftest import TEST_PASSWORD
 
-CREDENTIALS = {"email": "alice@example.com", "password": TEST_PASSWORD}
+CREDENTIALS = {
+    "email": "alice@example.com",
+    "name": "Alice Martin",
+    "password": TEST_PASSWORD,
+}
+
+
+LOGIN = {"email": CREDENTIALS["email"], "password": CREDENTIALS["password"]}
 
 
 def _register(client, **overrides):
@@ -43,6 +50,27 @@ class TestRegistration:
         assert response.status_code == 201
         assert response.json()["access_token"]
         assert response.json()["user"]["email"] == CREDENTIALS["email"]
+        assert response.json()["user"]["name"] == "Alice Martin"
+
+    def test_a_missing_name_is_refused(self, anonymous_client):
+        response = anonymous_client.post(
+            "/api/auth/register",
+            json={"email": "bob@example.com", "password": TEST_PASSWORD},
+        )
+        assert response.status_code == 422
+
+    def test_a_blank_name_is_refused(self, anonymous_client):
+        response = _register(anonymous_client, name="   ")
+        assert response.status_code == 422
+
+    def test_the_workspace_is_named_after_the_person(self, anonymous_client, session):
+        from app.models import Tenant, User
+
+        _register(anonymous_client)
+        user = session.query(User).filter_by(email=CREDENTIALS["email"]).one()
+        tenant = session.get(Tenant, user.tenant_id)
+
+        assert "Alice Martin" in tenant.name
 
     def test_creates_its_own_workspace(self, anonymous_client, session):
         _register(anonymous_client)
@@ -66,7 +94,7 @@ class TestRegistration:
 class TestLogin:
     def test_valid_credentials_return_a_token(self, anonymous_client):
         _register(anonymous_client)
-        response = anonymous_client.post("/api/auth/login", json=CREDENTIALS)
+        response = anonymous_client.post("/api/auth/login", json=LOGIN)
 
         assert response.status_code == 200
         assert response.json()["access_token"]
@@ -79,9 +107,7 @@ class TestLogin:
         """Same code and same message for both, so nothing reveals which
         addresses are registered."""
         _register(anonymous_client)
-        response = anonymous_client.post(
-            "/api/auth/login", json={**CREDENTIALS, **overrides}
-        )
+        response = anonymous_client.post("/api/auth/login", json={**LOGIN, **overrides})
 
         assert response.status_code == 401
         assert response.json()["code"] == "INVALID_CREDENTIALS"
@@ -170,7 +196,9 @@ class TestLogout:
 
 class TestAccessControl:
     def test_me_returns_the_current_user(self, client):
-        assert client.get("/api/auth/me").json()["email"] == "owner@example.com"
+        body = client.get("/api/auth/me").json()
+        assert body["email"] == "owner@example.com"
+        assert body["name"] == "Test Owner"
 
     def test_a_protected_route_needs_a_token(self, anonymous_client):
         response = anonymous_client.get("/api/batches")

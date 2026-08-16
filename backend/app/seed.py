@@ -23,18 +23,18 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 DEMO_ACCOUNTS = [
-    ("demo@example.com", "demo-password-123"),
-    ("second@example.com", "demo-password-123"),
+    ("demo@example.com", "demo-password-123", "Marie Dupont"),
+    ("second@example.com", "demo-password-123", "Jean Bernard"),
 ]
 
 
 def seed() -> None:
     with SessionLocal() as session:
-        for email, password in DEMO_ACCOUNTS:
+        for email, password, name in DEMO_ACCOUNTS:
             if session.scalar(select(User).where(User.email == email)) is not None:
                 logger.info("%-22s already exists", email)
                 continue
-            register(session, email, password)
+            register(session, email, password, name)
             logger.info("%-22s created with its own workspace", email)
 
     _report_orphaned_tenants()

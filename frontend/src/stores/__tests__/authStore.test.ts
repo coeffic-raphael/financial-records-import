@@ -13,7 +13,7 @@ const SESSION = {
   access_token: "token",
   token_type: "bearer",
   expires_in: 900,
-  user: { id: "u1", email: "a@example.com", tenant_id: "t1" },
+  user: { id: "u1", email: "a@example.com", name: "Alice Martin", tenant_id: "t1" },
 };
 
 beforeEach(() => {
