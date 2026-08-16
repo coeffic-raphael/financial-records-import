@@ -12,7 +12,9 @@ another tenant, and must answer 404.
 import pytest
 
 from app.main import create_app
-from app.models import ExtractionJob, FinancialRecord, ImportBatch, Tenant
+from app.models import FinancialRecord
+from tests.conftest import make_csv
+from tests.factories import VALID_RAW
 
 FOREIGN_REFERENCE = "OTHER-TENANT-REF"
 FOREIGN_DESCRIPTION = "Belongs to another tenant"
@@ -49,33 +51,27 @@ def test_the_matrix_is_not_empty():
 
 
 @pytest.fixture
-def foreign(session) -> dict[str, str]:
-    """A complete set of resources owned by a different tenant."""
-    tenant = Tenant(name="Demo Tenant B")
-    session.add(tenant)
-    session.flush()
+def foreign(other_client) -> dict[str, str]:
+    """Resources belonging to a DIFFERENT real account.
 
-    batch = ImportBatch(name="Other tenant batch", tenant_id=tenant.id)
-    session.add(batch)
-    session.flush()
+    Created through the API by a second authenticated user rather than inserted
+    into the database, so what is exercised is the real scenario: two people
+    signed in at the same time, one reaching for the other's data.
+    """
+    batch_id = other_client.post("/api/batches", json={"name": "Other workspace"}).json()["id"]
+    other_client.post(
+        f"/api/batches/{batch_id}/uploads/csv",
+        files={"file": ("other.csv", _foreign_csv(), "text/csv")},
+    )
+    record_id = other_client.get(f"/api/batches/{batch_id}/records").json()[0]["id"]
+    return {"batch_id": batch_id, "record_id": record_id}
 
-    record = FinancialRecord(
-        batch_id=batch.id,
-        import_sequence=0,
-        reference=FOREIGN_REFERENCE,
-        description=FOREIGN_DESCRIPTION,
-        source_type="CSV",
-        source_document_name="other.csv",
-        status="VALID",
-        validation_errors=[],
-        raw_payload={"reference": FOREIGN_REFERENCE},
-    )
-    job = ExtractionJob(
-        batch_id=batch.id, document_name="other.pdf", status="SUCCEEDED"
-    )
-    session.add_all([record, job])
-    session.commit()
-    return {"batch_id": batch.id, "record_id": record.id}
+
+def _foreign_csv() -> bytes:
+    row = dict(VALID_RAW)
+    row["reference"] = FOREIGN_REFERENCE
+    row["description"] = FOREIGN_DESCRIPTION
+    return make_csv([row])
 
 
 def _call(client, method: str, path: str, ids: dict[str, str]):
@@ -119,12 +115,17 @@ def test_a_write_attempt_leaves_the_foreign_record_untouched(client, session, fo
     assert record.description == FOREIGN_DESCRIPTION
 
 
-def test_a_foreign_upload_creates_no_job(client, session, foreign):
-    client.post(
-        f"/api/batches/{foreign['batch_id']}/uploads/pdf",
-        files=[("files", ("x.pdf", b"%PDF-1.4", "application/pdf"))],
-    )
-    session.expire_all()
+def test_an_anonymous_caller_is_refused_everywhere(anonymous_client, foreign):
+    """Without a token there is no tenant at all, so nothing is reachable."""
+    for method, path in SCOPED_ROUTES:
+        response = _call(anonymous_client, method, path, foreign)
+        assert response.status_code == 401, f"{method} {path} answered {response.status_code}"
 
-    jobs = session.query(ExtractionJob).filter_by(batch_id=foreign["batch_id"]).all()
-    assert len(jobs) == 1, "only the fixture's job must exist"
+
+def test_the_owner_can_reach_their_own_resources(other_client, foreign):
+    """The counterpart: isolation must not be achieved by refusing everyone."""
+    response = other_client.get(f"/api/batches/{foreign['batch_id']}")
+    assert response.status_code == 200
+    assert FOREIGN_REFERENCE in other_client.get(
+        f"/api/batches/{foreign['batch_id']}/records"
+    ).text

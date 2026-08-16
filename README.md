@@ -9,6 +9,20 @@ normalized model.
 > **Work in progress.** This README will be replaced by the full documentation
 > once the application is feature-complete. See [Current state](#current-state).
 
+## Signing in
+
+The API requires authentication. Two demonstration accounts are created by
+`make seed`:
+
+| Email | Password |
+|---|---|
+| `demo@example.com` | `demo-password-123` |
+| `second@example.com` | `demo-password-123` |
+
+Each owns a separate workspace, which is the quickest way to see tenant
+isolation: sign in as one, create a batch, sign in as the other, and it is not
+there. Registration is open, so a new account works too.
+
 ---
 
 ## Architecture in one picture
@@ -114,26 +128,65 @@ Every command below is run from the `backend/` directory.
 
 ```bash
 cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+make install
 cp .env.example .env
 ```
 
-No API key is required at this stage.
+That is enough to start: the template runs in debug with the mock extraction
+provider, so **no credential of any kind is required** to exercise the full
+workflow.
+
+For anything beyond local use, set a real `JWT_SECRET` of at least 32
+characters — the application refuses to start otherwise rather than signing
+tokens with a weak key:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+For real PDF extraction, set `EXTRACTION_PROVIDER=gemini` and a
+`GEMINI_API_KEY`. A misconfigured provider also stops startup, rather than
+failing on someone's first upload.
 
 ## Run
 
 ```bash
-.venv/bin/alembic upgrade head
-.venv/bin/uvicorn app.main:app --reload
+make seed
+make run
 ```
 
 Interactive API documentation is generated at <http://localhost:8000/docs>.
 
+## Upgrading an existing database
+
+Authentication is a **breaking change for data created before it existed**.
+Batches used to belong to a default workspace with no account attached, and a
+workspace with no account cannot be signed into — so that data becomes
+unreachable.
+
+The migration cannot repair this: attaching a user would mean inventing a
+password and committing it to migration history. So it **refuses to run** on a
+database that already holds batches, rather than completing and quietly making
+them unreachable:
+
+```
+This database holds 3 batch(es) created before accounts existed.
+They belong to a workspace with no user, so after this migration no one
+could sign in and reach them.
+
+Either start from an empty database, or re-import the data into a
+registered account afterwards and set ALLOW_ORPHANED_DATA=1 to proceed.
+```
+
+Accepting the consequence is a deliberate act. `make seed` also reports any
+workspace left without an account, so nothing disappears silently.
+
+**A fresh installation is unaffected** and needs none of this.
+
 ## Tests
 
 ```bash
-.venv/bin/pytest
+make test
 ```
 
 The suite is **hermetic**: no network, no API key, no external service, and no
@@ -143,7 +196,7 @@ not merely marked — a mark enables selection, it does not deselect.
 Run them deliberately, with a key configured:
 
 ```bash
-.venv/bin/pytest -m live
+make test-live
 ```
 
 ## Sample files
@@ -165,6 +218,8 @@ test asserts the exact set of error codes for every row.
 - CSV ingestion — every row is imported, never the whole file rejected
 - Batch and record API: create, list, filter, field-level errors, correct,
   revalidate, approve, batch summary
+- Authentication: Argon2id, short-lived access tokens kept in memory, rotating
+  refresh tokens with reuse detection
 - Tenant scoping on every query, with cross-tenant access returning `404`
 - Alembic migrations, applied by the test suite from an empty database (SQLite;
   PostgreSQL portability is claimed, not yet verified in CI)
@@ -174,7 +229,6 @@ test asserts the exact set of error codes for every row.
 
 **Not yet**
 
-- Authentication
 - Frontend
 - Docker Compose
 

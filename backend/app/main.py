@@ -1,6 +1,7 @@
 """Application factory."""
 
 import logging
+import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -8,12 +9,38 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import batches, records
+from app.api import auth, batches, records
 from app.api.errors import register_error_handlers
 from app.config import get_settings
 from app.providers.registry import build_provider
 
 logger = logging.getLogger(__name__)
+
+
+MIN_SECRET_BYTES = 32
+
+
+def _check_signing_secret(settings) -> None:
+    """A secret too short weakens HS256, and PyJWT warns about it at runtime.
+
+    Refusing at startup is better than a warning nobody reads. In debug an
+    ephemeral secret is generated instead, which invalidates every existing
+    session on restart -- acceptable locally, fatal anywhere else, hence the
+    guard.
+    """
+    if len(settings.jwt_secret) >= MIN_SECRET_BYTES:
+        return
+    if settings.debug:
+        settings.jwt_secret = secrets.token_urlsafe(MIN_SECRET_BYTES)
+        logger.warning(
+            "DEBUG: no JWT_SECRET configured, generated an ephemeral one. "
+            "Every session will be invalidated on restart."
+        )
+        return
+    raise ValueError(
+        f"JWT_SECRET must be at least {MIN_SECRET_BYTES} characters. "
+        "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+    )
 
 
 @asynccontextmanager
@@ -26,6 +53,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     document. Failing here says what is wrong before anyone tries.
     """
     settings = get_settings()
+    _check_signing_secret(settings)
     try:
         provider = build_provider(settings)
     except ValueError as error:
@@ -70,6 +98,7 @@ def create_app() -> FastAPI:
         return response
 
     register_error_handlers(app)
+    app.include_router(auth.public_router, prefix="/api")
     app.include_router(batches.router, prefix="/api")
     app.include_router(records.router, prefix="/api")
 

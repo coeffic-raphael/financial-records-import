@@ -8,7 +8,9 @@
 # lockfile would buy and why it is not used here.
 
 fastapi==0.141.1
-pydantic==2.13.4
+# The [email] extra pulls in email-validator, which EmailStr needs at import
+# time. Without it the application fails to start, not at first use.
+pydantic[email]==2.13.4
 pydantic-settings==2.15.0
 sqlalchemy==2.0.52
 alembic==1.19.1
@@ -22,6 +24,12 @@ python-multipart==0.0.32
 # extensions, which makes a reviewer's install slower and more fragile for no
 # gain that matters here.
 uvicorn==0.52.3
+
+# Authentication.
+# argon2-cffi rather than bcrypt: Argon2id is the current password-hashing
+# recommendation, and bcrypt silently truncates beyond 72 bytes.
+argon2-cffi==25.1.0
+pyjwt==2.13.0
 
 # AI providers. Both are imported lazily, so the application starts and serves
 # every non-extraction endpoint even with no credentials configured.

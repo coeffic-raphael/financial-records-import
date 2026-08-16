@@ -16,6 +16,8 @@ import os
 # startup check would otherwise refuse to boot without a key. Set before any
 # module reads the settings.
 os.environ["EXTRACTION_PROVIDER"] = "mock"
+os.environ.setdefault("JWT_SECRET", "test-secret-long-enough-for-hs256-abcdefgh")
+os.environ.setdefault("COOKIE_SECURE", "false")
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,7 +31,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.deps import get_extraction_provider
 from app.db import create_app_engine, get_session, get_session_factory
 from app.main import create_app
-from app.models import ExtractionJob, FinancialRecord, ImportBatch, Tenant
+from app.models import (
+    ExtractionJob,
+    FinancialRecord,
+    ImportBatch,
+    RefreshToken,
+    Tenant,
+    User,
+)
 from app.services.pdf_extraction import reset_semaphore
 from tests.factories import VALID_RAW
 
@@ -64,7 +73,7 @@ def clean_tables(engine: Engine) -> Iterator[None]:
     """Every test starts from an empty database, in dependency order."""
     yield
     with Session(engine) as session:
-        for model in (FinancialRecord, ExtractionJob, ImportBatch, Tenant):
+        for model in (FinancialRecord, ExtractionJob, ImportBatch, RefreshToken, User, Tenant):
             session.execute(delete(model))
         session.commit()
 
@@ -73,6 +82,35 @@ def clean_tables(engine: Engine) -> Iterator[None]:
 def session(engine: Engine) -> Iterator[Session]:
     with Session(engine) as db_session:
         yield db_session
+
+
+TEST_PASSWORD = "correct-horse-battery-staple"
+
+
+OWNER_EMAIL = "owner@example.com"
+OTHER_EMAIL = "intruder@example.com"
+
+
+def authenticate(test_client: TestClient, email: str = OWNER_EMAIL) -> TestClient:
+    """Attach a real bearer token to every subsequent request.
+
+    The suite does NOT bypass authentication. Tests written before it existed
+    keep passing because they now go through it for real, which makes them more
+    faithful than they were, not less.
+
+    Registers, or signs in when the account already exists, so that several
+    clients in one test can share an identity -- a fixture creating a batch and
+    another uploading into it must be the same tenant, or the isolation rules
+    correctly refuse them.
+    """
+    credentials = {"email": email, "password": TEST_PASSWORD}
+    response = test_client.post("/api/auth/register", json=credentials)
+    if response.status_code == 409:
+        response = test_client.post("/api/auth/login", json=credentials)
+    assert response.status_code in (200, 201), response.text
+
+    test_client.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
+    return test_client
 
 
 def _build_client(engine: Engine, provider=None) -> TestClient:
@@ -98,6 +136,21 @@ def _build_client(engine: Engine, provider=None) -> TestClient:
 
 @pytest.fixture
 def client(engine: Engine) -> Iterator[TestClient]:
+    """An authenticated client, owning its own freshly created tenant."""
+    with _build_client(engine) as test_client:
+        yield authenticate(test_client, OWNER_EMAIL)
+
+
+@pytest.fixture
+def other_client(engine: Engine) -> Iterator[TestClient]:
+    """A second, unrelated account -- the one isolation is tested against."""
+    with _build_client(engine) as test_client:
+        yield authenticate(test_client, OTHER_EMAIL)
+
+
+@pytest.fixture
+def anonymous_client(engine: Engine) -> Iterator[TestClient]:
+    """No credentials at all."""
     with _build_client(engine) as test_client:
         yield test_client
 
@@ -116,7 +169,9 @@ def client_with_provider(engine: Engine):
         test_client = _build_client(engine, provider)
         test_client.__enter__()
         clients.append(test_client)
-        return test_client
+        # Same identity as the `client` fixture, so a batch created there is
+        # reachable here: different accounts are correctly isolated.
+        return authenticate(test_client, OWNER_EMAIL)
 
     yield _make
     for test_client in clients:

@@ -21,6 +21,22 @@ class Settings(BaseSettings):
 
     max_upload_bytes: int = 10 * 1024 * 1024
 
+    # --- Authentication ---
+    debug: bool = False
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+
+    # Short-lived on purpose: it is what makes an access-token denylist
+    # unnecessary. Revocation happens on the refresh token, which is stateful.
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 14
+
+    # Secure cookies are never sent over http://localhost, so a development run
+    # would fail authentication with no visible reason. Driven by config; the
+    # other two attributes are unconditional.
+    cookie_secure: bool = True
+    refresh_cookie_name: str = "refresh_token"
+
     # --- AI extraction ---
     # None of these may carry a VITE_ prefix: any VITE_* variable is compiled
     # into the browser bundle. Extraction is server-side only; the frontend

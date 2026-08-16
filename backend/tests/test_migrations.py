@@ -59,8 +59,31 @@ def _insert_legacy_rows(path: str, batches: dict[str, int]) -> None:
     connection.close()
 
 
+def _insert_batch_only(path: str) -> None:
+    """A tenant with a batch and no user: what a pre-authentication database holds."""
+    connection = sqlite3.connect(path)
+    tenant_id = str(uuid.uuid4())
+    connection.execute(
+        "INSERT INTO tenant (id, name, created_at) VALUES (?, ?, ?)",
+        (tenant_id, "Demo Tenant A", datetime(2026, 1, 1).isoformat()),
+    )
+    connection.execute(
+        "INSERT INTO import_batch (id, name, tenant_id, created_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), "Before accounts", tenant_id, datetime(2026, 1, 1).isoformat()),
+    )
+    connection.commit()
+    connection.close()
+
+
 @pytest.fixture
-def legacy_database(tmp_path) -> str:
+def legacy_database(tmp_path, monkeypatch) -> str:
+    """A populated database from before import_sequence existed.
+
+    These tests upgrade a database that holds data, which the authentication
+    revision refuses to do by default. They acknowledge that deliberately: the
+    subject here is the backfill, not the account migration.
+    """
+    monkeypatch.setenv("ALLOW_ORPHANED_DATA", "1")
     path = tmp_path / "legacy.db"
     url = f"sqlite:///{path}"
     command.upgrade(_config(url), BEFORE_IMPORT_SEQUENCE)
@@ -159,3 +182,64 @@ def test_column_has_no_server_default(legacy_database):
     connection.close()
     assert column[4] is None, "import_sequence must not carry a server default"
     assert column[3] == 1, "import_sequence must be NOT NULL"
+
+
+class TestAuthenticationMigrationRefusesToOrphanData:
+    """Adding accounts to an app that had none is breaking, so it stops.
+
+    Batches used to belong to a workspace with no user. After this revision a
+    workspace is only reachable through an account, so that data would become
+    invisible. Completing while quietly disconnecting it is worse than
+    refusing, so the migration refuses and says why.
+    """
+
+    BEFORE_AUTH = "1653257e517f"
+    ESCAPE_HATCH = "ALLOW_ORPHANED_DATA"
+
+    @pytest.fixture
+    def populated_before_auth(self, tmp_path, monkeypatch) -> str:
+        monkeypatch.delenv(self.ESCAPE_HATCH, raising=False)
+        url = f"sqlite:///{tmp_path / 'legacy.db'}"
+        command.upgrade(_config(url), self.BEFORE_AUTH)
+        _insert_batch_only(url.removeprefix("sqlite:///"))
+        return url
+
+    def test_an_empty_database_upgrades_normally(self, tmp_path):
+        url = f"sqlite:///{tmp_path / 'fresh.db'}"
+        command.upgrade(_config(url), "head")
+
+    def test_a_populated_database_is_refused(self, populated_before_auth):
+        with pytest.raises(RuntimeError, match="created before accounts existed"):
+            command.upgrade(_config(populated_before_auth), "head")
+
+    def test_the_refusal_says_how_to_proceed(self, populated_before_auth):
+        with pytest.raises(RuntimeError) as raised:
+            command.upgrade(_config(populated_before_auth), "head")
+
+        assert self.ESCAPE_HATCH in str(raised.value)
+        assert "empty database" in str(raised.value)
+
+    def test_nothing_is_migrated_when_refused(self, populated_before_auth):
+        with pytest.raises(RuntimeError):
+            command.upgrade(_config(populated_before_auth), "head")
+
+        connection = sqlite3.connect(populated_before_auth.removeprefix("sqlite:///"))
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        connection.close()
+        assert "user" not in tables, "the schema must be left as it was"
+
+    def test_the_escape_hatch_allows_an_informed_upgrade(
+        self, populated_before_auth, monkeypatch
+    ):
+        """Accepting the consequence is a deliberate act, not a default."""
+        monkeypatch.setenv(self.ESCAPE_HATCH, "1")
+        command.upgrade(_config(populated_before_auth), "head")
+
+        connection = sqlite3.connect(populated_before_auth.removeprefix("sqlite:///"))
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        connection.close()
+        assert "user" in tables

@@ -50,6 +50,60 @@ class Tenant(Base):
     )
 
 
+class User(Base):
+    """A person, belonging to exactly one tenant.
+
+    Sharing a tenant between colleagues would need an invitation flow; here each
+    registration creates its own tenant, which is documented as a limitation.
+    """
+
+    __tablename__ = "user"
+
+    id: Mapped[str] = mapped_column(String(UUID_LEN), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+
+    # Never the password itself, and never returned by any schema: no response
+    # DTO exposes this column.
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(UUID_LEN), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    tenant: Mapped[Tenant] = relationship()
+
+    __table_args__ = (Index("ix_user_tenant", "tenant_id"),)
+
+
+class RefreshToken(Base):
+    """A rotating, revocable session credential.
+
+    The token itself is never stored -- only a hash of it, so a database leak
+    does not hand over live sessions.
+
+    SHA-256 rather than Argon2 here, deliberately: this is a 256-bit random
+    value, not a low-entropy password, so there is nothing to brute-force and an
+    indexed lookup by hash is what makes verification a single query instead of
+    a scan.
+    """
+
+    __tablename__ = "refresh_token"
+
+    id: Mapped[str] = mapped_column(String(UUID_LEN), primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    user_id: Mapped[str] = mapped_column(
+        String(UUID_LEN), ForeignKey("user.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    user: Mapped[User] = relationship()
+
+    __table_args__ = (Index("ix_refresh_token_user", "user_id"),)
+
+
 class ImportBatch(Base):
     __tablename__ = "import_batch"
 

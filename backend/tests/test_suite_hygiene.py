@@ -113,3 +113,38 @@ class TestStartupRefusesBadConfiguration:
             assert client.get("/api/health").json() == {"status": "ok"}
 
         get_settings.cache_clear()
+
+
+class TestSigningSecretIsChecked:
+    """A secret too short weakens HS256, and PyJWT only warns at runtime."""
+
+    def test_a_short_secret_prevents_startup(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from app.config import get_settings
+        from app.main import create_app
+
+        monkeypatch.setenv("JWT_SECRET", "too-short")
+        monkeypatch.setenv("DEBUG", "false")
+        get_settings.cache_clear()
+
+        with pytest.raises(ValueError, match="at least 32"), TestClient(create_app()):
+            pass
+
+        get_settings.cache_clear()
+
+    def test_debug_generates_an_ephemeral_secret(self, monkeypatch):
+        """Convenient locally, and never reachable outside debug."""
+        from fastapi.testclient import TestClient
+
+        from app.config import get_settings
+        from app.main import create_app
+
+        monkeypatch.setenv("JWT_SECRET", "")
+        monkeypatch.setenv("DEBUG", "true")
+        get_settings.cache_clear()
+
+        with TestClient(create_app()) as client:
+            assert client.get("/api/health").status_code == 200
+
+        get_settings.cache_clear()

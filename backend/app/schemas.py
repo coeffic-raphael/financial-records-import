@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
 
 
 def _serialize_money(value: Decimal | None) -> str | None:
@@ -53,6 +53,40 @@ class ValidationErrorOut(BaseModel):
     field: str
     code: str
     message: str
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+    password: str = Field(min_length=1)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str
+    password: str
+
+
+class UserOut(BaseModel):
+    """No password field exists here, and that is the point of an explicit DTO."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    email: str
+    tenant_id: str
+
+
+class SessionOut(BaseModel):
+    """The access token travels in the BODY, never in a cookie.
+
+    The frontend keeps it in memory only. The refresh token is the opposite: an
+    httpOnly cookie the JavaScript never sees.
+    """
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserOut
 
 
 class BatchCreate(BaseModel):
