@@ -1,6 +1,8 @@
-iniconfig==2.3.0
-packaging==26.3
-pluggy==1.6.0
-Pygments==2.20.0
+# Development and test dependencies, pinned.
+
 pytest==9.1.1
 ruff==0.16.3
+
+# Required by fastapi.testclient. Like python-multipart above, it appears in no
+# import statement of ours.
+httpx==0.28.1

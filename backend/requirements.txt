@@ -1,5 +1,24 @@
-# Runtime dependencies.
+# Runtime dependencies, pinned.
 #
-# The domain layer (normalization, validation) uses the standard library only,
-# so no runtime dependency is required yet. FastAPI, Pydantic and SQLAlchemy
-# arrive with the persistence layer; the provider SDKs with the AI connector.
+# REQUIRES PYTHON 3.11 OR NEWER. The code uses StrEnum and datetime.UTC, both
+# introduced in 3.11; on 3.10 the very first import fails.
+#
+# Direct dependencies only. Transitive ones (starlette, anyio, Mako, ...) are
+# left to resolve. See "Production improvements" in the README for what a full
+# lockfile would buy and why it is not used here.
+
+fastapi==0.141.1
+pydantic==2.13.4
+pydantic-settings==2.15.0
+sqlalchemy==2.0.52
+alembic==1.19.1
+
+# Required by FastAPI to parse multipart uploads. It appears in no import
+# statement in this codebase, so it looks removable -- it is not: dropping it
+# breaks CSV upload at runtime.
+python-multipart==0.0.32
+
+# ASGI server. Plain rather than uvicorn[standard]: the extras compile C
+# extensions, which makes a reviewer's install slower and more fragile for no
+# gain that matters here.
+uvicorn==0.52.3
