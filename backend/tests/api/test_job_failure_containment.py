@@ -42,7 +42,7 @@ def test_a_persistence_failure_leaves_no_half_written_records(
     client = client_with_provider(MockProvider(records=[{"reference": "R-1"}]))
     _upload(client, batch["id"])
 
-    assert client.get(f"/api/batches/{batch['id']}/records").json() == []
+    assert client.get(f"/api/batches/{batch['id']}/records").json()["items"] == []
 
 
 def test_the_api_survives_a_persistence_failure(

@@ -12,7 +12,7 @@ def records(client, batch):
 
     def _load(rows):
         upload_csv(client, batch["id"], make_csv(rows))
-        return client.get(f"/api/batches/{batch['id']}/records").json()
+        return client.get(f"/api/batches/{batch['id']}/records").json()["items"]
 
     return _load
 
@@ -110,7 +110,7 @@ class TestRevalidation:
 
     def test_duplicate_stays_duplicate_after_revalidation(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        second = client.get(f"/api/batches/{batch['id']}/records").json()[1]
+        second = client.get(f"/api/batches/{batch['id']}/records").json()["items"][1]
 
         response = client.post(f"/api/records/{second['id']}/revalidate")
         assert [e["code"] for e in response.json()["validation_errors"]] == [
@@ -119,7 +119,7 @@ class TestRevalidation:
 
     def test_renaming_a_duplicate_resolves_it(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        second = client.get(f"/api/batches/{batch['id']}/records").json()[1]
+        second = client.get(f"/api/batches/{batch['id']}/records").json()["items"][1]
 
         response = client.patch(
             f"/api/records/{second['id']}", json={"reference": "TX-TEST-0002"}

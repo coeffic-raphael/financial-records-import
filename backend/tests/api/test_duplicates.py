@@ -15,7 +15,7 @@ from tests.factories import make_raw
 def _references(client, batch_id):
     return [
         (r["reference"], r["status"], [e["code"] for e in r["validation_errors"]])
-        for r in client.get(f"/api/batches/{batch_id}/records").json()
+        for r in client.get(f"/api/batches/{batch_id}/records").json()["items"]
     ]
 
 
@@ -63,7 +63,7 @@ class TestStability:
         NEEDS_REVIEW -- a VALID record becoming invalid with no correction.
         """
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        first = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        first = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         response = client.post(f"/api/records/{first['id']}/revalidate")
 
@@ -72,7 +72,7 @@ class TestStability:
 
     def test_revalidating_the_second_occurrence_keeps_it_duplicated(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        second = client.get(f"/api/batches/{batch['id']}/records").json()[1]
+        second = client.get(f"/api/batches/{batch['id']}/records").json()["items"][1]
 
         response = client.post(f"/api/records/{second['id']}/revalidate")
 
@@ -82,7 +82,7 @@ class TestStability:
 
     def test_repeated_revalidation_is_stable(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
 
         for _ in range(3):
             for record, expected in zip(records, ["VALID", "NEEDS_REVIEW"], strict=True):
@@ -91,7 +91,7 @@ class TestStability:
 
     def test_editing_an_unrelated_field_does_not_change_the_verdict(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        first = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        first = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         response = client.patch(
             f"/api/records/{first['id']}", json={"description": "Renamed"}
@@ -100,7 +100,7 @@ class TestStability:
 
     def test_renaming_the_duplicate_frees_both(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw(), make_raw()]))
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
 
         client.patch(f"/api/records/{records[1]['id']}", json={"reference": "TX-B"})
 

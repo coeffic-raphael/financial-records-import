@@ -47,12 +47,24 @@ def _invoice_record(**overrides):
 # The eight lines of the supplied statement, with the Amount column -- never the
 # running Balance.
 STATEMENT_AMOUNTS = [
-    "75000.00", "-250.00", "-4680.00", "1245.35",
-    "-50000.00", "-5616.00", "-35.00", "8750.00",
+    "75000.00",
+    "-250.00",
+    "-4680.00",
+    "1245.35",
+    "-50000.00",
+    "-5616.00",
+    "-35.00",
+    "8750.00",
 ]
 STATEMENT_BALANCES = {
-    "323500.00", "323250.00", "318570.00", "319815.35",
-    "269815.35", "264199.35", "264164.35", "272914.35",
+    "323500.00",
+    "323250.00",
+    "318570.00",
+    "319815.35",
+    "269815.35",
+    "264199.35",
+    "264164.35",
+    "272914.35",
 }
 
 
@@ -107,7 +119,8 @@ class TestUploadIsNotBlocking:
         client = client_with_provider(MockProvider(records=[_invoice_record()]))
         _upload(client, batch["id"])
 
-        statuses = {r["status"] for r in client.get(f"/api/batches/{batch['id']}/records").json()}
+        page = client.get(f"/api/batches/{batch['id']}/records").json()
+        statuses = {record["status"] for record in page["items"]}
         assert statuses <= {"NEEDS_REVIEW", "VALID", "VALIDATED"}
 
 
@@ -116,7 +129,7 @@ class TestInvoiceExtraction:
         client = client_with_provider(MockProvider(records=[_invoice_record()]))
         _upload(client, batch["id"])
 
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         assert len(records) == 1
         assert records[0]["source_type"] == "PDF"
         assert records[0]["status"] == "VALID"
@@ -124,19 +137,17 @@ class TestInvoiceExtraction:
     def test_extracted_records_go_through_the_same_validation(self, client_with_provider, batch):
         """No PDF-specific validation exists: an unsupported currency is caught
         by the very rule that catches it in a CSV."""
-        client = client_with_provider(
-            MockProvider(records=[_invoice_record(currency="JPY")])
-        )
+        client = client_with_provider(MockProvider(records=[_invoice_record(currency="JPY")]))
         _upload(client, batch["id"])
 
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         assert [e["code"] for e in record["validation_errors"]] == ["UNSUPPORTED_CURRENCY"]
 
     def test_original_filename_is_preserved(self, client_with_provider, batch):
         client = client_with_provider(MockProvider(records=[_invoice_record()]))
         _upload(client, batch["id"], ("invoice_legal_services.pdf",))
 
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         assert record["source_document_name"] == "invoice_legal_services.pdf"
 
 
@@ -145,33 +156,31 @@ class TestBankStatement:
         client = client_with_provider(MockProvider(records=_statement_records()))
         _upload(client, batch["id"], ("bank_statement_july_2026.pdf",))
 
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         assert len(records) == 8
 
-    def test_amounts_are_transaction_values_not_running_balances(
-        self, client_with_provider, batch
-    ):
+    def test_amounts_are_transaction_values_not_running_balances(self, client_with_provider, batch):
         """The trap of the supplied statement: two adjacent numeric columns."""
         client = client_with_provider(MockProvider(records=_statement_records()))
         _upload(client, batch["id"])
 
-        amounts = {r["net_amount"] for r in client.get(
-            f"/api/batches/{batch['id']}/records").json()}
+        amounts = {
+            r["net_amount"]
+            for r in client.get(f"/api/batches/{batch['id']}/records").json()["items"]
+        }
         assert amounts == set(STATEMENT_AMOUNTS)
         assert not amounts & STATEMENT_BALANCES
 
 
 class TestIncompleteExtraction:
-    def test_missing_required_fields_are_saved_as_needs_review(
-        self, client_with_provider, batch
-    ):
+    def test_missing_required_fields_are_saved_as_needs_review(self, client_with_provider, batch):
         """Explicit assignment requirement: saved, not discarded."""
         client = client_with_provider(
             MockProvider(records=[{"reference": "PARTIAL-1", "description": "Only two fields"}])
         )
         _upload(client, batch["id"])
 
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         assert len(records) == 1
         assert records[0]["status"] == "NEEDS_REVIEW"
         assert "REQUIRED_FIELD_MISSING" in [e["code"] for e in records[0]["validation_errors"]]
@@ -182,8 +191,9 @@ class TestIncompleteExtraction:
         )
         _upload(client, batch["id"])
 
-        statuses = [r["status"] for r in client.get(
-            f"/api/batches/{batch['id']}/records").json()]
+        statuses = [
+            r["status"] for r in client.get(f"/api/batches/{batch['id']}/records").json()["items"]
+        ]
         assert sorted(statuses) == ["NEEDS_REVIEW", "VALID"]
 
     def test_an_empty_extraction_succeeds_with_no_records(self, client_with_provider, batch):
@@ -203,24 +213,20 @@ class TestLowConfidence:
         scores = dict.fromkeys(record, 1.0)
         scores["counterparty_name"] = 0.2
 
-        client = client_with_provider(
-            MockProvider(records=[record], field_confidence=[scores])
-        )
+        client = client_with_provider(MockProvider(records=[record], field_confidence=[scores]))
         _upload(client, batch["id"])
 
-        persisted = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        persisted = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         assert persisted["status"] == "NEEDS_REVIEW"
         assert [e["code"] for e in persisted["validation_errors"]] == ["LOW_CONFIDENCE"]
 
     def test_field_confidence_is_exposed(self, client_with_provider, batch):
         record = _invoice_record()
         scores = dict.fromkeys(record, 0.91)
-        client = client_with_provider(
-            MockProvider(records=[record], field_confidence=[scores])
-        )
+        client = client_with_provider(MockProvider(records=[record], field_confidence=[scores]))
         _upload(client, batch["id"])
 
-        persisted = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        persisted = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         assert persisted["field_confidence"]["reference"] == 0.91
         assert persisted["extraction_confidence"] == "0.91"
 
@@ -228,11 +234,9 @@ class TestLowConfidence:
         """Revalidation replays raw_payload, so the confidence must live there."""
         record = _invoice_record()
         scores = dict.fromkeys(record, 0.2)
-        client = client_with_provider(
-            MockProvider(records=[record], field_confidence=[scores])
-        )
+        client = client_with_provider(MockProvider(records=[record], field_confidence=[scores]))
         _upload(client, batch["id"])
-        persisted = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        persisted = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         after = client.patch(f"/api/records/{persisted['id']}", json={"description": "Edited"})
 
@@ -262,12 +266,10 @@ class TestProviderFailures:
         assert job["error"]
 
     def test_nothing_is_persisted_when_extraction_fails(self, client_with_provider, batch):
-        client = client_with_provider(
-            MockProvider(raises=InvalidProviderResponseError("bad json"))
-        )
+        client = client_with_provider(MockProvider(raises=InvalidProviderResponseError("bad json")))
         _upload(client, batch["id"])
 
-        assert client.get(f"/api/batches/{batch['id']}/records").json() == []
+        assert client.get(f"/api/batches/{batch['id']}/records").json()["items"] == []
 
     def test_the_api_stays_available_after_a_failure(self, client_with_provider, batch):
         client = client_with_provider(MockProvider(raises=TransientProviderError("boom")))

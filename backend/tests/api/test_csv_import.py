@@ -21,14 +21,14 @@ class TestSampleFile:
     def test_original_filename_is_preserved(self, client, batch, sample_csv):
         """Explicit assignment requirement."""
         upload_csv(client, batch["id"], sample_csv, "transactions_import.csv")
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         assert {r["source_document_name"] for r in records} == {"transactions_import.csv"}
         assert {r["source_type"] for r in records} == {"CSV"}
 
     def test_amounts_are_serialized_as_strings(self, client, batch, sample_csv):
         """A JSON number would be parsed back into a float, losing precision."""
         upload_csv(client, batch["id"], sample_csv)
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         first = next(r for r in records if r["reference"] == "TX-2026-0001")
         assert first["net_amount"] == "1463.09"
         assert isinstance(first["net_amount"], str)
@@ -48,7 +48,7 @@ class TestMalformedFiles:
     def test_rejected_file_inserts_nothing(self, client, batch):
         content = make_csv([{"reference": "A"}], columns=["reference", "description"])
         upload_csv(client, batch["id"], content)
-        assert client.get(f"/api/batches/{batch['id']}/records").json() == []
+        assert client.get(f"/api/batches/{batch['id']}/records").json()["items"] == []
 
     def test_header_only_file_imports_zero_rows(self, client, batch):
         response = upload_csv(client, batch["id"], make_csv([]))
@@ -74,7 +74,7 @@ class TestInvalidRows:
         content = make_csv([make_raw(), make_raw(description="Same reference again")])
         upload_csv(client, batch["id"], content)
 
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
         assert records[0]["status"] == "VALID"
         assert records[1]["status"] == "NEEDS_REVIEW"
         assert [e["code"] for e in records[1]["validation_errors"]] == ["DUPLICATE_REFERENCE"]
@@ -83,7 +83,7 @@ class TestInvalidRows:
         content = make_csv([make_raw(currency="JPY")])
         upload_csv(client, batch["id"], content)
 
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         errors = client.get(f"/api/records/{record['id']}/validation-errors").json()
         assert errors == [
             {
@@ -95,14 +95,22 @@ class TestInvalidRows:
 
 
 class TestFiltering:
+    """`total` is asserted alongside `items`: it is the number the reviewer
+    reads to size the work, so a filter that narrowed the page but not the
+    count would be worse than one that did nothing."""
+
     def test_filter_by_status(self, client, batch, sample_csv):
         upload_csv(client, batch["id"], sample_csv)
         url = f"/api/batches/{batch['id']}/records"
-        assert len(client.get(url, params={"status": "VALID"}).json()) == 18
-        assert len(client.get(url, params={"status": "NEEDS_REVIEW"}).json()) == 12
+        valid = client.get(url, params={"status": "VALID"}).json()
+        review = client.get(url, params={"status": "NEEDS_REVIEW"}).json()
+        assert (len(valid["items"]), valid["total"]) == (18, 18)
+        assert (len(review["items"]), review["total"]) == (12, 12)
 
     def test_filter_by_source_type(self, client, batch, sample_csv):
         upload_csv(client, batch["id"], sample_csv)
         url = f"/api/batches/{batch['id']}/records"
-        assert len(client.get(url, params={"source_type": "CSV"}).json()) == 30
-        assert client.get(url, params={"source_type": "PDF"}).json() == []
+        csv_page = client.get(url, params={"source_type": "CSV"}).json()
+        pdf_page = client.get(url, params={"source_type": "PDF"}).json()
+        assert (len(csv_page["items"]), csv_page["total"]) == (30, 30)
+        assert (pdf_page["items"], pdf_page["total"]) == ([], 0)

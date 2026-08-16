@@ -59,8 +59,12 @@ export function RecordFilters({
         </button>
       )}
 
+      {/* The whole filtered set, not the page: "shown" would have become
+          "up to 25" the moment paging arrived. */}
       {count !== undefined && (
-        <span className="ml-auto tabular-nums text-slate-400">{count} shown</span>
+        <span className="ml-auto tabular-nums text-slate-400">
+          {count} record{count === 1 ? "" : "s"}
+        </span>
       )}
     </div>
   );

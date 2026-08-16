@@ -48,7 +48,7 @@ class TestExtractionIsAtomic:
         client = client_with_provider(MockProvider(records=RECORDS))
         _upload(client, batch["id"])
 
-        assert client.get(f"/api/batches/{batch['id']}/records").json() == []
+        assert client.get(f"/api/batches/{batch['id']}/records").json()["items"] == []
 
     def test_the_job_reports_the_failure(
         self, client_with_provider, batch, crash_after_records_are_written
@@ -65,7 +65,7 @@ class TestExtractionIsAtomic:
         _upload(client, batch["id"])
 
         job = client.get(f"/api/batches/{batch['id']}/jobs").json()[0]
-        records = client.get(f"/api/batches/{batch['id']}/records").json()
+        records = client.get(f"/api/batches/{batch['id']}/records").json()["items"]
 
         assert job["status"] == "SUCCEEDED"
         assert job["record_count"] == len(records) == 3

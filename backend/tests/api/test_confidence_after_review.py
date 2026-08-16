@@ -49,7 +49,7 @@ def extracted(client_with_provider, batch):
         f"/api/batches/{batch['id']}/uploads/pdf",
         files=[("files", ("statement.pdf", PDF, "application/pdf"))],
     )
-    record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
     return client, record
 
 
@@ -136,7 +136,7 @@ class TestWhatCorrectionDoesNotExcuse:
             f"/api/batches/{batch['id']}/uploads/pdf",
             files=[("files", ("statement.pdf", PDF, "application/pdf"))],
         )
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         response = client.patch(
             f"/api/records/{record['id']}",
@@ -157,7 +157,7 @@ class TestWhatCorrectionDoesNotExcuse:
         from tests.factories import make_raw
 
         upload_csv(client, batch["id"], make_csv([make_raw(currency="JPY")]))
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         response = client.patch(f"/api/records/{record['id']}", json={"currency": "EUR"})
 

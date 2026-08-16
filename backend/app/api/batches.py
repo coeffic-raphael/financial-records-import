@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Query, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import (
     SessionDep,
@@ -31,6 +31,7 @@ from app.schemas import (
     ExtractionAccepted,
     ExtractionJobOut,
     ImportResult,
+    Page,
     RecordOut,
 )
 from app.services.csv_import import import_csv
@@ -246,9 +247,7 @@ async def upload_pdfs(
     for job, (filename, path) in zip(jobs, spooled, strict=True):
         # Queued rather than awaited; the task opens its own session, reads the
         # spooled file and deletes it.
-        background_tasks.add_task(
-            run_extraction, job.id, path, filename, provider, session_factory
-        )
+        background_tasks.add_task(run_extraction, job.id, path, filename, provider, session_factory)
 
     return ExtractionAccepted(jobs=[ExtractionJobOut.model_validate(job) for job in jobs])
 
@@ -266,21 +265,53 @@ def list_jobs(batch_id: str, session: SessionDep, tenant: TenantDep) -> list[Ext
     )
 
 
-@router.get("/{batch_id}/records", response_model=list[RecordOut])
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+@router.get("/{batch_id}/records", response_model=Page[RecordOut])
 def list_records(
     batch_id: str,
     session: SessionDep,
     tenant: TenantDep,
     record_status: str | None = Query(default=None, alias="status"),
     source_type: str | None = Query(default=None),
-) -> list[FinancialRecord]:
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(default=0, ge=0),
+) -> Page[RecordOut]:
+    """Return one page of a batch's records.
+
+    The page is bounded by the server, not by the caller's good manners: a
+    batch holds as many records as the uploaded file had rows, so an unbounded
+    list would let a single import decide how much memory a response takes.
+
+    Ordering is `import_sequence`, the position the row had in its import. It
+    is the order a reviewer expects -- the order of the file they uploaded --
+    and it is total within a batch, so a record cannot appear on two pages or
+    on none because two timestamps happened to tie.
+    """
     batch = _get_batch(session, batch_id, tenant.id)
-    query = select(FinancialRecord).where(FinancialRecord.batch_id == batch.id)
+
+    filtered = select(FinancialRecord).where(FinancialRecord.batch_id == batch.id)
     if record_status:
-        query = query.where(FinancialRecord.status == record_status)
+        filtered = filtered.where(FinancialRecord.status == record_status)
     if source_type:
-        query = query.where(FinancialRecord.source_type == source_type)
-    return list(session.scalars(query.order_by(FinancialRecord.created_at)))
+        filtered = filtered.where(FinancialRecord.source_type == source_type)
+
+    # Counted over the filtered set, before the slice: this is what tells a
+    # reviewer how much work is left, not how much fits on one page.
+    total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
+    records = session.scalars(
+        filtered.order_by(FinancialRecord.import_sequence).limit(limit).offset(offset)
+    )
+    # Converted here rather than left to the response model: parametrizing a
+    # generic is the one place a stray ORM object would reach Pydantic itself.
+    return Page[RecordOut](
+        items=[RecordOut.model_validate(record) for record in records],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{batch_id}/summary", response_model=BatchSummary)

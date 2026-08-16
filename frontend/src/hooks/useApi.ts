@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { api } from "../lib/apiClient";
@@ -9,6 +9,7 @@ import type {
   ExtractionJob,
   FinancialRecord,
   ImportResult,
+  Page,
 } from "../lib/types";
 import { useAuthStore } from "../stores/authStore";
 
@@ -40,14 +41,31 @@ export function useBatch(batchId: string) {
   });
 }
 
-export function useRecords(batchId: string, filters: { status?: string; source_type?: string }) {
+export const PAGE_SIZE = 25;
+
+/**
+ * One page of a batch's records.
+ *
+ * `placeholderData` keeps the previous page on screen while the next one
+ * loads. Without it every page change empties the table for a moment, which
+ * reads as "there is nothing here" rather than "this is loading".
+ */
+export function useRecords(
+  batchId: string,
+  filters: { status?: string; source_type?: string },
+  offset = 0,
+) {
   const userId = useUserId();
-  const query = new URLSearchParams(
-    Object.entries(filters).filter(([, value]) => Boolean(value)) as [string, string][],
-  ).toString();
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+  for (const [name, value] of Object.entries(filters)) {
+    if (value) params.set(name, value);
+  }
   return useQuery({
-    queryKey: scopedKey(userId, "batch", batchId, "records", filters),
-    queryFn: () => api.get<FinancialRecord[]>(`/api/batches/${batchId}/records?${query}`),
+    // The pagination lives inside the same trailing object as the filters, so
+    // invalidating the `records` prefix still reaches every page.
+    queryKey: scopedKey(userId, "batch", batchId, "records", { ...filters, offset }),
+    queryFn: () => api.get<Page<FinancialRecord>>(`/api/batches/${batchId}/records?${params}`),
+    placeholderData: keepPreviousData,
   });
 }
 

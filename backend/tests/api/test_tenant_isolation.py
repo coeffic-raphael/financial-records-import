@@ -63,7 +63,7 @@ def foreign(other_client) -> dict[str, str]:
         f"/api/batches/{batch_id}/uploads/csv",
         files={"file": ("other.csv", _foreign_csv(), "text/csv")},
     )
-    record_id = other_client.get(f"/api/batches/{batch_id}/records").json()[0]["id"]
+    record_id = other_client.get(f"/api/batches/{batch_id}/records").json()["items"][0]["id"]
     return {"batch_id": batch_id, "record_id": record_id}
 
 

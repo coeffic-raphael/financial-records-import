@@ -35,7 +35,7 @@ def test_invalid_value_is_persisted_as_needs_review(
     assert response.status_code == 201
     assert response.json()["imported"] == 1
 
-    record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
     assert record["status"] == "NEEDS_REVIEW"
     assert expected_code in [error["code"] for error in record["validation_errors"]]
 
@@ -56,13 +56,13 @@ def test_the_original_value_survives_in_the_record(client, batch):
     """Reporting a value invalid must not mean discarding it: the user corrects it."""
     upload_csv(client, batch["id"], make_csv([make_raw(country="LUXEMBOURG")]))
 
-    record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
     assert record["country"] == "LUXEMBOURG"
 
 
 def test_an_invalid_value_can_be_corrected(client, batch):
     upload_csv(client, batch["id"], make_csv([make_raw(country="LUXEMBOURG")]))
-    record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
     response = client.patch(f"/api/records/{record['id']}", json={"country": "LU"})
 

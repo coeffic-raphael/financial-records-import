@@ -7,7 +7,7 @@ hash, an internal field) cannot silently appear in a response.
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
 
@@ -91,6 +91,29 @@ class SessionOut(BaseModel):
     user: UserOut
 
 
+ItemT = TypeVar("ItemT")
+
+
+class Page(BaseModel, Generic[ItemT]):
+    """One slice of a list, plus the size of the whole.
+
+    `total` is not decoration. The workflow asks a reviewer to see how many
+    records still need review, and that number is a property of the filtered
+    set, not of the page in front of them -- a count taken from `items` would
+    silently become "up to 50" and misreport the work left to do.
+
+    Offset paging rather than a cursor: a batch is a bounded set with a dense,
+    stable order (`import_sequence`), and a reviewer works through it by
+    jumping to a page. A cursor buys stability under concurrent inserts, which
+    is not what happens here -- an import is finished before anyone reviews it.
+    """
+
+    items: list[ItemT]
+    total: int
+    limit: int
+    offset: int
+
+
 class BatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
@@ -105,7 +128,6 @@ class BatchOut(BaseModel):
 
 class RecordOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
 
     id: str
     batch_id: str

@@ -23,7 +23,7 @@ PDF_BYTES = (SAMPLES / "invoice_legal_services.pdf").read_bytes()
 @pytest.fixture
 def csv_record(client, batch):
     upload_csv(client, batch["id"], make_csv([make_raw()]), "july.csv")
-    return client, client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    return client, client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def pdf_record(client_with_provider, batch):
         f"/api/batches/{batch['id']}/uploads/pdf",
         files=[("files", ("invoice.pdf", PDF_BYTES, "application/pdf"))],
     )
-    return client, client.get(f"/api/batches/{batch['id']}/records").json()[0]
+    return client, client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
 
 class TestTheDocumentIsKept:
@@ -110,7 +110,7 @@ class TestFilenamesAreNotTrusted:
 
     def test_a_quote_cannot_break_the_header(self, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw()]), 'we"ird.csv')
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         header = client.get(f"/api/records/{record['id']}/document").headers[
             "content-disposition"
@@ -122,13 +122,13 @@ class TestOnlyTheOwnerCanOpenIt:
     def test_another_tenant_gets_404(self, client, other_client, batch):
         """Discovered automatically by the cross-tenant matrix as well."""
         upload_csv(client, batch["id"], make_csv([make_raw()]))
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         assert other_client.get(f"/api/records/{record['id']}/document").status_code == 404
 
     def test_an_anonymous_caller_gets_401(self, anonymous_client, client, batch):
         upload_csv(client, batch["id"], make_csv([make_raw()]))
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
 
         assert anonymous_client.get(f"/api/records/{record['id']}/document").status_code == 401
 
@@ -136,7 +136,7 @@ class TestOnlyTheOwnerCanOpenIt:
 class TestWhenThereIsNothingToShow:
     def test_a_record_without_a_document_answers_404(self, client, batch, session):
         upload_csv(client, batch["id"], make_csv([make_raw()]))
-        record_id = client.get(f"/api/batches/{batch['id']}/records").json()[0]["id"]
+        record_id = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]["id"]
 
         from app.models import FinancialRecord
 
@@ -151,7 +151,7 @@ class TestWhenThereIsNothingToShow:
         from app.services.documents import storage_path
 
         upload_csv(client, batch["id"], make_csv([make_raw()]))
-        record = client.get(f"/api/batches/{batch['id']}/records").json()[0]
+        record = client.get(f"/api/batches/{batch['id']}/records").json()["items"][0]
         document = session.query(SourceDocument).one()
         storage_path(get_settings().upload_storage_dir, document.id).unlink()
 

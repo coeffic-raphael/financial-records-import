@@ -42,6 +42,19 @@ export interface FinancialRecord {
   updated_at: string;
 }
 
+/**
+ * One slice of a server-side list.
+ *
+ * `total` counts the filtered set, not the slice: it is what tells a reviewer
+ * how much work is left, and it is the number the UI must show.
+ */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface Batch {
   id: string;
   name: string;
