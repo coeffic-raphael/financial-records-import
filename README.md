@@ -258,8 +258,8 @@ test asserts the exact set of error codes for every row.
 
 **Not yet**
 
-- Frontend
-- Docker Compose
+- Docker Compose, and the PostgreSQL run that would make the portability above
+  a fact rather than a claim
 
 ## Production improvements
 
