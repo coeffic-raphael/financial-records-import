@@ -19,7 +19,13 @@ import type { FinancialRecord } from "../../lib/types";
  */
 
 const correct = { mutate: vi.fn(), isPending: false, error: null };
-const revalidate = { mutate: vi.fn(), isPending: false, error: null };
+const revalidate = {
+  mutate: vi.fn(),
+  isPending: false,
+  isSuccess: false,
+  data: undefined as FinancialRecord | undefined,
+  error: null,
+};
 const validate = { mutate: vi.fn(), isPending: false, error: null };
 
 let current: FinancialRecord;
@@ -50,6 +56,8 @@ const button = (name: string) => screen.getByRole("button", { name }) as HTMLBut
 beforeEach(() => {
   correct.mutate.mockReset();
   revalidate.mutate.mockReset();
+  revalidate.isSuccess = false;
+  revalidate.data = undefined;
   validate.mutate.mockReset();
 });
 afterEach(cleanup);
@@ -156,5 +164,42 @@ describe("what the reviewer is told", () => {
       raw_payload: { transaction_date: "2026-13-16" },
     });
     expect(screen.getByText("2026-13-16")).toBeTruthy();
+  });
+});
+
+
+describe("what re-running validation reports", () => {
+  it("says nothing changed rather than staying silent", () => {
+    /* The bug this covers: the request succeeded, the verdict was identical,
+       and the screen did not move -- which reads as a dead button. */
+    revalidate.isSuccess = true;
+    revalidate.data = makeRecord({
+      status: "NEEDS_REVIEW",
+      validation_errors: [{ field: "country", code: "INVALID_COUNTRY_CODE", message: "no" }],
+    });
+    show({ status: "NEEDS_REVIEW" });
+
+    expect(screen.getByText(/Re-checked the saved record/)).toBeTruthy();
+    expect(screen.getByText(/1 issue still to resolve/)).toBeTruthy();
+  });
+
+  it("reports a record that came back clean", () => {
+    revalidate.isSuccess = true;
+    revalidate.data = makeRecord({ status: "VALID", validation_errors: [] });
+    show({ status: "VALID" });
+
+    expect(screen.getByText(/no issues remain/)).toBeTruthy();
+  });
+
+  it("says nothing before the button is used", () => {
+    show({ status: "NEEDS_REVIEW" });
+    expect(screen.queryByText(/Re-checked the saved record/)).toBeNull();
+  });
+
+  it("shows progress while the request is in flight", () => {
+    revalidate.isPending = true;
+    show({ status: "NEEDS_REVIEW" });
+    expect(screen.getByRole("button", { name: "Re-checking…" })).toBeTruthy();
+    revalidate.isPending = false;
   });
 });

@@ -118,6 +118,7 @@ function RecordEditor({ record }: { record: FinancialRecord }) {
         />
       )}
 
+
       <SourceDocumentPanel
         recordId={record.id}
         filename={record.source_document_name}
@@ -166,13 +167,24 @@ function RecordEditor({ record }: { record: FinancialRecord }) {
             <Button type="submit" disabled={correct.isPending || !dirty}>
               {correct.isPending ? "Saving…" : "Save and revalidate"}
             </Button>
+            {/* Refused while the form is dirty. This re-checks the record AS
+                STORED, replaying the pipeline from raw_payload -- a draft the
+                user has typed but not saved is not part of it. Left enabled, it
+                re-reads the old value while the screen shows the new one and
+                reports the same issue, which reads as a broken button rather
+                than as "you have not saved yet". */}
             <Button
               type="button"
               variant="ghost"
-              disabled={revalidate.isPending}
+              disabled={revalidate.isPending || dirty}
               onClick={() => revalidate.mutate()}
+              title={
+                dirty
+                  ? "Save your changes first — this re-checks the record as stored"
+                  : "Check the stored record again against the current state of its batch"
+              }
             >
-              Re-run validation
+              {revalidate.isPending ? "Re-checking…" : "Re-run validation"}
             </Button>
             <Button
               type="button"
@@ -187,6 +199,25 @@ function RecordEditor({ record }: { record: FinancialRecord }) {
             >
               Validate
             </Button>
+            {/* Next to the buttons, not at the top of the page.
+                The form is long -- a source document panel and fifteen fields --
+                so a confirmation rendered above it lands off-screen, and a
+                button whose result you cannot see reads as a broken one.
+
+                Re-running validation replays the pipeline from raw_payload, so
+                on an unchanged record it legitimately reaches the same verdict.
+                Saying "nothing changed" is the useful answer: it tells a
+                reviewer the remaining issues are real, not stale. */}
+            {revalidate.isSuccess && !revalidate.isPending && (
+              <p className="basis-full text-sm text-slate-600" role="status">
+                Re-checked the saved record against its batch —{" "}
+                {revalidate.data.validation_errors.length === 0
+                  ? "no issues remain."
+                  : `${revalidate.data.validation_errors.length} issue${
+                      revalidate.data.validation_errors.length > 1 ? "s" : ""
+                    } still to resolve.`}
+              </p>
+            )}
             {dirty && (
               <button
                 type="button"
