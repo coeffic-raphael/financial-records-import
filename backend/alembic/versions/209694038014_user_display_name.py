@@ -32,10 +32,16 @@ def upgrade() -> None:
 
     # Existing accounts predate the field. The local part of the address is the
     # least surprising stand-in, and the person can change it later.
+    #
+    # SPLIT_PART rather than SUBSTR/INSTR: INSTR is a SQLite function and this
+    # statement made `alembic upgrade head` fail outright on PostgreSQL. The
+    # migration had never been executable on the target engine, so it is fixed
+    # here rather than papered over by a later revision -- no later migration
+    # can repair one that blocks an empty database from reaching head.
     op.execute(
         """
         UPDATE "user"
-        SET name = SUBSTR(email, 1, INSTR(email, '@') - 1)
+        SET name = SPLIT_PART(email, '@', 1)
         WHERE name IS NULL
         """
     )
