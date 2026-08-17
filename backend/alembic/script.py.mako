@@ -10,9 +10,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-# Custom column types (app.db.Money) are rendered fully qualified by
-# autogenerate, so the module must be importable from every migration.
-import app.db  # noqa: F401
 ${imports if imports else ""}
 
 # revision identifiers, used by Alembic.

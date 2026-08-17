@@ -8,13 +8,22 @@ request that needs it.
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "sqlite:///./financial_records.db"
+    # No default on purpose. A default would silently point a misconfigured
+    # deployment at the wrong database; being unable to start is the better
+    # failure. Note this only catches an ABSENT url: create_engine() is lazy, so
+    # an unreachable one surfaces on the first connection -- in the container
+    # that is `alembic upgrade head`, which runs before uvicorn.
+    # min_length rather than a bare `str`: an empty DATABASE_URL= line in a .env
+    # satisfies a required string, and this project has already been bitten by
+    # exactly that with JWT_SECRET.
+    database_url: str = Field(min_length=1)
 
     # Explicit origins are mandatory: browsers forbid "*" together with credentials.
     cors_allowed_origins: str = "http://localhost:5173"

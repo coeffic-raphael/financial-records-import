@@ -45,6 +45,27 @@ def references_before(session: Session, batch_id: str, sequence: int) -> frozens
     return frozenset(reference for reference in session.scalars(query) if reference)
 
 
+def lock_batch_for_import(session: Session, batch_id: str) -> None:
+    """Serialise imports into one batch, for the rest of the transaction.
+
+    Two things in an import are read-then-write, and both are wrong when two
+    imports overlap:
+
+    - `next_import_sequence` reads MAX and adds one, so both would allocate the
+      same positions and neither record would see the other as earlier;
+    - `references_before` cannot see rows the other transaction has not
+      committed, so a reference present in both would be reported as duplicate
+      in neither.
+
+    A counter fixes only the first. Locking the batch row fixes both: the second
+    import waits, then reads a database where the first has committed.
+
+    Held until commit, because the outer service owns the transaction. Two
+    different batches never contend.
+    """
+    session.execute(select(ImportBatch).where(ImportBatch.id == batch_id).with_for_update())
+
+
 def next_import_sequence(session: Session, batch_id: str) -> int:
     """Arrival position for the next record of this batch.
 

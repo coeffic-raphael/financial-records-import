@@ -7,18 +7,20 @@ received.
 
 The guard is an invariant rather than a list of symptoms: any amount the domain
 accepts must survive a round trip through the column unchanged.
+
+The round trip is a real one. An earlier version called `process_bind_param` and
+`process_result_value` with a dialect object, which for PostgreSQL were both
+pass-throughs -- the assertion reduced to `value == value`. This writes into a
+`NUMERIC(18, 2)` column through psycopg and reads it back.
 """
 
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy import Column, MetaData, Numeric, String, Table, insert, select
 
-from app.db import ExactDecimal
 from app.domain.errors import ErrorCode
 from app.domain.normalization import normalize_amount, normalize_confidence
-
-DIALECTS = {"sqlite": sqlite.dialect(), "postgresql": postgresql.dialect()}
 
 ACCEPTED_AMOUNTS = [
     "0",
@@ -33,18 +35,35 @@ ACCEPTED_AMOUNTS = [
 ]
 
 
-@pytest.mark.parametrize("dialect_name", list(DIALECTS))
+@pytest.fixture(scope="module")
+def amount_column(engine):
+    """A real NUMERIC(18, 2) column, created and dropped around the module."""
+    metadata = MetaData()
+    table = Table(
+        "storage_invariant_probe",
+        metadata,
+        Column("label", String(64), primary_key=True),
+        Column("amount", Numeric(18, 2)),
+    )
+    metadata.create_all(engine)
+    yield engine, table
+    metadata.drop_all(engine)
+
+
 @pytest.mark.parametrize("raw", ACCEPTED_AMOUNTS)
-def test_accepted_amount_survives_storage_unchanged(raw, dialect_name):
+def test_accepted_amount_survives_storage_unchanged(raw, amount_column):
+    engine, table = amount_column
     value, problem = normalize_amount(raw)
     assert problem is None, f"{raw!r} should be accepted"
 
-    column = ExactDecimal(18, 2)
-    dialect = DIALECTS[dialect_name]
-    stored = column.process_bind_param(value, dialect)
-    restored = column.process_result_value(stored, dialect)
+    with engine.begin() as connection:
+        connection.execute(insert(table).values(label=raw, amount=value))
+        restored = connection.execute(
+            select(table.c.amount).where(table.c.label == raw)
+        ).scalar_one()
 
     assert restored == value, f"{raw!r} changed on its way through storage"
+    assert isinstance(restored, Decimal), "an amount came back as something other than Decimal"
 
 
 class TestScaleIsReportedNotRounded:

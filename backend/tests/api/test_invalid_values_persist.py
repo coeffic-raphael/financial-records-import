@@ -5,8 +5,9 @@ record. Any schema constraint on a user-supplied column turns that reportable
 error into a failed INSERT -- and because an import runs in one transaction, one
 bad cell would lose the entire file.
 
-SQLite silently ignores VARCHAR limits, so these cases could never fail here
-before the columns were widened; they would only have surfaced on PostgreSQL.
+These cases run against PostgreSQL, which enforces declared widths -- so an
+over-long value reaching a bounded column really would fail the INSERT. That is
+what makes the assertions below meaningful rather than hypothetical.
 """
 
 import pytest

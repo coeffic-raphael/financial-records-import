@@ -1,9 +1,9 @@
 """Batch summary.
 
-Amounts are aggregated in Python, not in SQL. That is a direct consequence of
-the Money column type: exact decimal storage on SQLite means TEXT, which SQL
-cannot SUM correctly. At the scale of a batch (tens of records) the cost is
-nil, and correctness beats a query.
+Amounts are aggregated in Python rather than in SQL. `NUMERIC(18, 2)` could be
+summed in the query; at the scale of a batch (tens of records) moving it would
+buy nothing measurable, and currencies must stay separated either way. It stays
+in Python until a profile says otherwise.
 """
 
 from collections import defaultdict

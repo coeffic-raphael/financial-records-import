@@ -37,6 +37,7 @@ from app.schemas import (
 from app.services.csv_import import import_csv
 from app.services.documents import store
 from app.services.pdf_extraction import create_jobs, run_extraction
+from app.services.records import lock_batch_for_import
 from app.services.summary import build_summary
 
 router = APIRouter(
@@ -169,6 +170,11 @@ async def upload_csv(
     # open the file it came from.
     filename, spooled = await _spool_upload(file, settings.max_upload_bytes, "upload.csv", "csv")
     try:
+        # Before store(), not inside persist_records(). store() inserts a
+        # source_document row whose foreign key makes PostgreSQL take a
+        # FOR KEY SHARE lock on this batch; two imports would then each hold one
+        # and deadlock trying to promote it to FOR UPDATE.
+        lock_batch_for_import(session, batch.id)
         document = store(
             session,
             batch,

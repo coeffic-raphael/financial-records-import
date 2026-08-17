@@ -78,7 +78,8 @@ most likely to make, because it always looks like good schema design. It has
 been made three times so far — nullability, `CHECK` constraints and column
 widths — and only the third one reached the schema, where `country VARCHAR(2)`
 would have made PostgreSQL reject the value `LUX` and lose the whole import.
-SQLite ignores `VARCHAR` limits, so no test could have caught it.
+PostgreSQL enforces declared widths, so the tests covering over-long values
+exercise a real constraint.
 
 Amounts get the same treatment from the other side. A value beyond
 `NUMERIC(18, 2)` is reported as `AMOUNT_OUT_OF_RANGE` rather than handed to the
@@ -126,7 +127,6 @@ one, which also excludes the record itself.
 | Migrations | **Alembic from the start**, never `create_all()` |
 | Migration history | **Immutable.** A committed migration must keep running forever, so a symbol it references is never renamed away — see the `Money` alias in `db.py` |
 | Backfills | A new `NOT NULL` column is added nullable, backfilled, then tightened. A `server_default` would quietly give every existing row the same value |
-| `alembic check` blind spot | It runs on SQLite, where `ExactDecimal(3, 2)` and `ExactDecimal(18, 2)` both render as `String(64)`. A precision change is therefore invisible to it. Type changes that only differ on PostgreSQL need review, not CI |
 
 ---
 

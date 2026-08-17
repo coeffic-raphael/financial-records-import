@@ -4,8 +4,8 @@ The schema is created by running the real Alembic migrations, not
 `create_all()`. Every test run therefore also proves the migration applies to an
 empty database.
 
-This proves it for SQLite only. PostgreSQL portability stays a claim until a
-PostgreSQL service runs the same migrations in CI.
+The engine is PostgreSQL, the same one the application and CI use, so what the
+suite proves about the schema is what production would see.
 """
 
 import csv
@@ -46,20 +46,13 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, delete
+from sqlalchemy import Engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import get_extraction_provider
 from app.db import create_app_engine, get_session, get_session_factory
 from app.main import create_app
-from app.models import (
-    ExtractionJob,
-    FinancialRecord,
-    ImportBatch,
-    RefreshToken,
-    Tenant,
-    User,
-)
 from app.services.pdf_extraction import reset_semaphore
 from tests.factories import VALID_RAW
 
@@ -70,16 +63,60 @@ BACKEND_ROOT = Path(__file__).parents[1]
 SAMPLES = BACKEND_ROOT.parent / "samples"
 
 
+def _test_database_url() -> str:
+    """The database this suite is allowed to empty, and nothing else.
+
+    Every test truncates seven tables. There is no temporary file to fall back
+    on any more, so a wrong URL here does not waste a run -- it destroys someone
+    real data. Hence three refusals rather than a sensible default:
+    """
+    url = os.environ.get("DATABASE_URL_TEST")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL_TEST is required to run the suite. It must point at a "
+            "database whose name ends in _test; the tests empty every table in it."
+        )
+    if url == os.environ.get("DATABASE_URL"):
+        raise RuntimeError(
+            "DATABASE_URL_TEST is the same as DATABASE_URL. The suite would empty "
+            "the database the application uses."
+        )
+    if not make_url(url).database.endswith("_test"):
+        raise RuntimeError(
+            f"refusing to run against {make_url(url).database!r}: the suite empties "
+            "every table, so its database name must end in _test."
+        )
+    return url
+
+
+TEST_DATABASE_URL = _test_database_url()
+
+# In dependency order for readability; CASCADE is what actually makes it safe.
+TRUNCATED_TABLES = (
+    "financial_record",
+    "extraction_job",
+    "source_document",
+    "import_batch",
+    "refresh_token",
+    '"user"',
+    "tenant",
+)
+
+
 @pytest.fixture(scope="session")
-def database_url(tmp_path_factory: pytest.TempPathFactory) -> str:
-    return f"sqlite:///{tmp_path_factory.mktemp('db') / 'test.db'}"
+def database_url() -> str:
+    return TEST_DATABASE_URL
 
 
 @pytest.fixture(scope="session")
 def engine(database_url: str) -> Engine:
+    """Schema built by the real migrations, from empty, once per session."""
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
+    # An earlier run may have left the schema behind: start from nothing so the
+    # migrations are exercised against an empty database every time.
+    command.downgrade(config, "base")
     command.upgrade(config, "head")
     return create_app_engine(database_url)
 
@@ -94,11 +131,21 @@ def isolated_semaphore() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def clean_tables(engine: Engine) -> Iterator[None]:
-    """Every test starts from an empty database, in dependency order."""
+    """Every test starts from an empty database.
+
+    One TRUNCATE rather than seven DELETEs: it is a single round trip, and
+    CASCADE removes the need to order the tables by dependency -- getting that
+    order wrong is a foreign key error, not a silent leftover, but there is no
+    reason to maintain the list at all.
+
+    A shared transaction rolled back per test would be faster still, and is
+    deliberately not used: four tests in this suite run real threads and need
+    commits one connection can see from another. A single transaction would make
+    them pass while proving nothing.
+    """
     yield
     with Session(engine) as session:
-        for model in (FinancialRecord, ExtractionJob, ImportBatch, RefreshToken, User, Tenant):
-            session.execute(delete(model))
+        session.execute(text(f"TRUNCATE {', '.join(TRUNCATED_TABLES)} RESTART IDENTITY CASCADE"))
         session.commit()
 
 

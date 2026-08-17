@@ -12,10 +12,6 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# database
-*.db
-*.sqlite3
-
 # node
 node_modules/
 dist/
@@ -32,6 +28,3 @@ uploads/
 docs/plans/
 docs/reviews/
 
-# SQLite write-ahead log sidecars
-*.db-wal
-*.db-shm

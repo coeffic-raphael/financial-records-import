@@ -15,13 +15,14 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.db import Base, ExactDecimal
+from app.db import Base
 from app.domain.enums import JobStatus, RecordStatus, SourceType
 
 
@@ -33,8 +34,13 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# UUIDs are stored as CHAR(36) rather than a native type: PostgreSQL has UUID,
-# SQLite does not, and a portable column keeps the migration honest.
+# UUIDs are stored as CHAR(36) rather than PostgreSQL's native UUID type.
+#
+# This began as a portability constraint and is now a retained choice: retyping
+# fifteen columns and the eight foreign keys between them, on a schema that
+# works, would buy twenty bytes a row and a validation the application already
+# performs. Worth revisiting only if identifier storage ever shows up in a
+# profile.
 UUID_LEN = 36
 
 
@@ -214,7 +220,9 @@ class FinancialRecord(Base):
     # careful design, but PostgreSQL would refuse to store the invalid value
     # "LUX" -- and since the import runs in one transaction, one bad cell would
     # lose the whole file, contradicting the requirement to import every row.
-    # SQLite ignores VARCHAR limits, so no test could have caught it.
+    # User-supplied columns are therefore unbounded Text, and PostgreSQL
+    # enforces what is declared -- so the tests covering over-long values
+    # exercise a real constraint rather than a hypothetical one.
     #
     # Plausibility limits live in the domain (MAX_FIELD_LENGTHS) where breaking
     # one is a reportable business error rather than a failed INSERT.
@@ -224,10 +232,10 @@ class FinancialRecord(Base):
     transaction_date: Mapped[date | None] = mapped_column(Date)
     value_date: Mapped[date | None] = mapped_column(Date)
     description: Mapped[str | None] = mapped_column(Text)
-    gross_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
-    fee_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
-    tax_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
-    net_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    gross_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    fee_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     currency: Mapped[str | None] = mapped_column(Text)
     counterparty_name: Mapped[str | None] = mapped_column(Text)
     counterparty_account: Mapped[str | None] = mapped_column(Text)
@@ -248,7 +256,7 @@ class FinancialRecord(Base):
     # NUMERIC(3, 2) would not have enforced [0, 1] anyway -- it accepts 9.99 --
     # while making 10.00 a failed INSERT instead of a reportable error. The
     # range is a business rule; see validation.check_confidence_range.
-    extraction_confidence: Mapped[Decimal | None] = mapped_column(ExactDecimal(18, 2))
+    extraction_confidence: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     field_confidence: Mapped[dict | None] = mapped_column(JSON)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False)
