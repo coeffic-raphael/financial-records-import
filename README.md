@@ -50,33 +50,75 @@ Two consequences this design is built for:
   correction is merged into the stored raw payload and revalidated through the
   identical code, so the import path and the correction path cannot drift apart.
 
+### Isolation is on the tenant, not the user
+
+Registration creates one account and one workspace, so in practice every user
+has their own today. Neither the schema nor the authorisation requires that.
+
+`user.tenant_id` is a plain foreign key: the only `UNIQUE` on the table is
+`email`, and the index on `tenant_id` is deliberately **not** unique. Several
+accounts can therefore belong to one workspace — verified by adding a second
+member to an existing tenant and signing in as them:
+
+```
+bug@example.com        -> 1 batch: ['Bug']
+colleague@example.com  -> 1 batch: ['Bug']      # same workspace, same data
+del@example.com        -> 0 batches             # another workspace, nothing
+```
+
+**This works because authorisation was never built on the user.** Every query
+filters on the tenant resolved from the token, never on who is signed in — the
+same property that makes cross-tenant access return `404`. A second member
+inherits it without a line changing.
+
+What is genuinely missing is the way in: no route invites an account into an
+existing workspace, and registration always creates a new one. Adding an
+organisation would mean an invitation flow and roles, not a data model change —
+the part that usually forces a migration is already there.
+
+---
+
 ## AI provider
 
 PDF content is extracted by a language model and converted into the same
 normalized records a CSV produces.
 
-**The choice of vendor is deliberately not load-bearing.** Reading fifteen
-fields off a two-page invoice is not a discriminating task: both candidates read
-PDFs natively and constrain their output to a JSON schema server-side, so
-capability did not decide anything. What decided it is the path to production.
+**The choice was measured, not argued.** Reading fifteen fields off an invoice
+does not separate these models — both did it correctly every time. The dense
+six-column bank statement does, and it is the document the assignment supplies
+precisely because it is harder.
 
-**Google Gemini** is the primary provider because the same SDK reaches Vertex
-AI, where processing can be pinned to an EU region (`europe-west1`) under a data
+Three runs each, same prompt, same document, counting records against the eight
+transaction rows the statement actually holds:
+
+| | Records returned | Duration | References read |
+|---|---|---|---|
+| **OpenAI `gpt-5.6`** | **8, 8, 8** | 24–37 s | all eight |
+| Google `gemini-3.5-flash` | 2, 2, 8 | 30–157 s | none |
+
+**OpenAI is the primary provider** on that evidence. Gemini did not merely
+return fewer rows: it left every `reference` null and, before the prompt
+described the table explicitly, concatenated two date cells into
+`"2026-07-0101/07/2026"`.
+
+**What that costs, stated plainly.** The earlier argument for Gemini was not
+about capability, and it has not gone away: the same SDK reaches Vertex AI,
+where processing can be pinned to an EU region (`europe-west1`) under a data
 residency commitment. For an application handling European bank statements that
-is a regulatory requirement, and it costs a constructor argument rather than a
-rewrite: the prototype and a sovereign deployment share the same connector,
-schema, prompt and tests.
+matters, and a deployment bound by it should set `EXTRACTION_PROVIDER=gemini`
+and accept the reliability shown above — or pay for a stronger Gemini model,
+which is the same trade-off seen from the other side. The decision here is
+correctness on the supplied documents; the decision in production may differ,
+and the point is that it costs one environment variable.
 
-**OpenAI** is implemented as the second link of a fallback chain. When both keys
-are present, a transient failure on the primary falls through. A permanent
-failure — bad key, unknown model — is never retried, since retrying cannot help
-and only delays the fallback.
+**The chain runs in whichever order the variable names.** With both keys
+present, `openai` yields `[openai, gemini]` and `gemini` yields the reverse: a
+transient failure on the primary falls through. A permanent failure — bad key,
+unknown model — is never retried, since retrying cannot help and only delays
+the fallback.
 
 **Mock** keeps the application fully usable with no credentials, and is what the
 test suite runs against.
-
-Switching primary provider is one environment variable. That is not an
-aspiration: the mock satisfying the same interface is what the suite exercises.
 
 ### Configuration
 
@@ -106,6 +148,25 @@ structural schema **before anything reaches the database**, and every field is
 optional in that schema: whether a field is required is a business rule, so it
 belongs to the domain. An incomplete extraction therefore produces a
 `NEEDS_REVIEW` record rather than a parse failure.
+
+### A limit worth stating
+
+On the supplied bank statement — a dense six-column table of eight rows —
+extraction is **not reliable**. Measured over six runs on `gemini-3.5-flash`,
+the model returned 8 records three times, 2 records twice, and 1 record once.
+
+Two things were done about it. The prompt now describes the statement as a
+table and forbids merging rows or concatenating cells, which removed a failure
+where eight rows collapsed into one record holding `"2026-07-0101/07/2026"` —
+two date cells joined. And an instruction to count the rows before answering
+was tried and **reverted**: it pushed the model to invent a tenth row, which
+breaks the rule that matters most.
+
+What remains is a model limit, not a code one, and the application degrades
+safely into it: a short extraction produces records with missing required
+fields and zero confidence, which land in `NEEDS_REVIEW` for a person to
+check. Reliability here is a question of model choice and budget, and belongs
+with the same trade-off as provider selection.
 
 Confidence is reported per field, bounded to `[0, 1]`, and aggregated to the
 **minimum** across required fields — a record is only as trustworthy as its
