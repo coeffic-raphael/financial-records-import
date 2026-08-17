@@ -12,26 +12,10 @@ import {
   StatusBadge,
 } from "../components/ui";
 import { useRecord, useRecordActions } from "../hooks/useApi";
+import { EDITABLE_FIELDS } from "../lib/fields";
 import { ApiError } from "../lib/apiError";
 import type { FinancialRecord } from "../lib/types";
 
-const EDITABLE_FIELDS = [
-  "reference",
-  "transaction_date",
-  "value_date",
-  "description",
-  "gross_amount",
-  "fee_amount",
-  "tax_amount",
-  "net_amount",
-  "currency",
-  "counterparty_name",
-  "counterparty_account",
-  "country",
-  "category",
-  "invoice_number",
-  "payment_method",
-] as const;
 
 export function RecordEditorPage() {
   const { recordId = "" } = useParams();

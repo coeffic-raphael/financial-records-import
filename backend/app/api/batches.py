@@ -28,6 +28,8 @@ from app.schemas import (
     BatchCreate,
     BatchOut,
     BatchSummary,
+    BulkCorrectionResult,
+    BulkRecordPatch,
     ExtractionAccepted,
     ExtractionJobOut,
     ImportResult,
@@ -37,7 +39,7 @@ from app.schemas import (
 from app.services.csv_import import import_csv
 from app.services.documents import collect_stored_files, refuse_duplicate, store
 from app.services.pdf_extraction import create_jobs, run_extraction
-from app.services.records import lock_batch_for_import
+from app.services.records import apply_corrections, lock_batch
 from app.services.summary import build_summary
 
 router = APIRouter(
@@ -212,7 +214,7 @@ async def upload_csv(
         # source_document row whose foreign key makes PostgreSQL take a
         # FOR KEY SHARE lock on this batch; two imports would then each hold one
         # and deadlock trying to promote it to FOR UPDATE.
-        lock_batch_for_import(session, batch.id)
+        lock_batch(session, batch.id)
         document = store(
             session,
             batch,
@@ -373,6 +375,47 @@ def list_records(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch("/{batch_id}/records", response_model=BulkCorrectionResult)
+def correct_records(
+    batch_id: str,
+    payload: BulkRecordPatch,
+    session: SessionDep,
+    tenant: TenantDep,
+) -> BulkCorrectionResult:
+    """Apply one correction to several records of this batch.
+
+    Scoped to a batch rather than taking ids from anywhere: the interface only
+    ever selects within one, so a cross-batch request would buy several locks
+    and an ordering rule for a case with no user.
+
+    Every id is resolved before anything is written. One that is unknown -- or
+    belongs to another tenant, which is the same answer -- refuses the whole
+    request, because a partial application is a state nobody asked for and
+    cannot replay.
+    """
+    batch = _get_batch(session, batch_id, tenant.id)
+    changes = payload.applied_changes()
+
+    # Locked first, then loaded: a record read before the wait carries a
+    # raw_payload another transaction may have replaced.
+    lock_batch(session, batch.id)
+    found = list(
+        session.scalars(
+            select(FinancialRecord).where(
+                FinancialRecord.batch_id == batch.id,
+                FinancialRecord.id.in_(payload.record_ids),
+            )
+        )
+    )
+    if len(found) != len(payload.record_ids):
+        raise not_found("Record")
+
+    by_status = apply_corrections(
+        session, found, changes, get_settings().extraction_confidence_threshold
+    )
+    return BulkCorrectionResult(updated=len(found), by_status=by_status)
 
 
 @router.get("/{batch_id}/summary", response_model=BatchSummary)

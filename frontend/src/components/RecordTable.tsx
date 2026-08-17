@@ -4,8 +4,21 @@ import { useNavigate } from "react-router-dom";
 import type { FinancialRecord } from "../lib/types";
 import { ConfidenceBadge, EmptyState, StatusBadge } from "./ui";
 
+interface Selection {
+  selected: Set<string>;
+  onToggle: (recordId: string) => void;
+  /** Off while the table shows a page that is being replaced. */
+  enabled: boolean;
+}
+
 /** Presentational. Receives rows, renders them, owns no data. */
-export function RecordTable({ records }: { records: FinancialRecord[] }) {
+export function RecordTable({
+  records,
+  selection,
+}: {
+  records: FinancialRecord[];
+  selection?: Selection;
+}) {
   if (records.length === 0) {
     return <EmptyState title="No record matches these filters" hint="Try widening them." />;
   }
@@ -15,6 +28,7 @@ export function RecordTable({ records }: { records: FinancialRecord[] }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+            {selection && <th className="w-10 px-4 py-2" />}
             <th className="px-4 py-2">Reference</th>
             <th className="px-4 py-2">Date</th>
             <th className="px-4 py-2">Counterparty</th>
@@ -26,7 +40,7 @@ export function RecordTable({ records }: { records: FinancialRecord[] }) {
         </thead>
         <tbody className="divide-y divide-slate-100">
           {records.map((record) => (
-            <RecordRow key={record.id} record={record} />
+            <RecordRow key={record.id} record={record} selection={selection} />
           ))}
         </tbody>
       </table>
@@ -34,7 +48,13 @@ export function RecordTable({ records }: { records: FinancialRecord[] }) {
   );
 }
 
-function RecordRow({ record }: { record: FinancialRecord }) {
+function RecordRow({
+  record,
+  selection,
+}: {
+  record: FinancialRecord;
+  selection?: Selection;
+}) {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const issues = record.validation_errors;
@@ -58,6 +78,24 @@ function RecordRow({ record }: { record: FinancialRecord }) {
         aria-label={`Open record ${record.reference ?? "without reference"}`}
         className="cursor-pointer transition hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-slate-400"
       >
+        {selection && (
+          <td className="px-4 py-2.5">
+            {/* The row is a link that opens on click, Enter AND Space -- and
+                Space is the key that ticks a checkbox. Stopping the click alone
+                left the keyboard path opening the record instead of selecting
+                it. */}
+            <input
+              type="checkbox"
+              checked={selection.selected.has(record.id)}
+              disabled={!selection.enabled}
+              onChange={() => selection.onToggle(record.id)}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              aria-label={`Select ${record.reference ?? "record without reference"}`}
+              className="size-4 rounded border-slate-300"
+            />
+          </td>
+        )}
         <td className="px-4 py-2.5">
           <span className="font-medium text-slate-800">
             {record.reference ?? <span className="italic text-slate-400">no reference</span>}
@@ -103,7 +141,7 @@ function RecordRow({ record }: { record: FinancialRecord }) {
 
       {expanded && (
         <tr className="bg-amber-50/40">
-          <td colSpan={7} className="px-4 py-3">
+          <td colSpan={selection ? 8 : 7} className="px-4 py-3">
             <ul className="space-y-1.5">
               {issues.map((issue) => (
                 <li key={issue.code + issue.field} className="flex gap-2 text-xs">

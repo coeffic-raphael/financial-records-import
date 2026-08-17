@@ -89,6 +89,27 @@ export function useSummary(batchId: string, enabled = true) {
   });
 }
 
+export function useCorrectRecords(batchId: string) {
+  const client = useQueryClient();
+  const userId = useUserId();
+  return useMutation({
+    mutationFn: (body: { record_ids: string[]; changes: Record<string, string> }) =>
+      api.patch<{ updated: number; by_status: Record<string, number> }>(
+        `/api/batches/${batchId}/records`,
+        body,
+      ),
+    onSuccess: (_result, body) => {
+      void client.invalidateQueries({ queryKey: scopedKey(userId, "batch", batchId) });
+      // The batch prefix does not cover these: an individual record lives under
+      // ["record", id], so a card opened a moment ago would still show the old
+      // value on the way back.
+      for (const recordId of body.record_ids) {
+        void client.invalidateQueries({ queryKey: scopedKey(userId, "record", recordId) });
+      }
+    },
+  });
+}
+
 export function useDeleteBatch() {
   const client = useQueryClient();
   const userId = useUserId();

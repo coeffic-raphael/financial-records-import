@@ -78,6 +78,16 @@ def _call(client, method: str, path: str, ids: dict[str, str]):
     for name, value in ids.items():
         path = path.replace("{" + name + "}", value)
 
+    # A body valid for THIS route, or FastAPI answers 422 from schema validation
+    # before the tenant check ever runs and the route is never really probed.
+    # (422 would not leak anything -- it depends only on the body -- but it
+    # would quietly stop testing what this matrix exists for.)
+    if method == "PATCH" and path.endswith("/records"):
+        return client.request(
+            method,
+            path,
+            json={"record_ids": [ids["record_id"]], "changes": {"description": "hijacked"}},
+        )
     if method in {"POST", "PATCH"} and "uploads" not in path:
         return client.request(method, path, json={"description": "hijacked"})
     if "uploads/csv" in path:

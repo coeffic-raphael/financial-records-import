@@ -6,6 +6,7 @@ assignment's "a corrected record must be revalidated" structural rather than a
 separate treatment.
 """
 
+from collections.abc import Sequence
 from decimal import Decimal
 
 from fastapi import status
@@ -45,8 +46,8 @@ def references_before(session: Session, batch_id: str, sequence: int) -> frozens
     return frozenset(reference for reference in session.scalars(query) if reference)
 
 
-def lock_batch_for_import(session: Session, batch_id: str) -> None:
-    """Serialise imports into one batch, for the rest of the transaction.
+def lock_batch(session: Session, batch_id: str) -> None:
+    """Serialise everything that reads or writes one batch's references.
 
     Two things in an import are read-then-write, and both are wrong when two
     imports overlap:
@@ -59,6 +60,11 @@ def lock_batch_for_import(session: Session, batch_id: str) -> None:
 
     A counter fixes only the first. Locking the batch row fixes both: the second
     import waits, then reads a database where the first has committed.
+
+    Taken by every path that reads references or writes a status: import,
+    extraction, correction, revalidation, approval and bulk correction. A path
+    that skipped it would race the others while they hold it, which is the same
+    defect with a longer name.
 
     Held until commit, because the outer service owns the transaction. Two
     different batches never contend.
@@ -137,23 +143,42 @@ def get_record(session: Session, record_id: str, tenant_id: str) -> FinancialRec
     return record
 
 
+def revalidate_in_transaction(
+    session: Session, record: FinancialRecord, confidence_threshold: Decimal
+) -> None:
+    """Replay validation on one record. DOES NOT COMMIT."""
+    references = references_before(session, record.batch_id, record.import_sequence)
+    revalidate(record, references, confidence_threshold)
+
+
 def revalidate_record(
     session: Session, record: FinancialRecord, confidence_threshold: Decimal
 ) -> FinancialRecord:
-    references = references_before(session, record.batch_id, record.import_sequence)
-    revalidate(record, references, confidence_threshold)
+    """Locked because it reads references_before: without it, the verdict could
+    be computed from a set another transaction is halfway through changing."""
+    lock_batch(session, record.batch_id)
+    session.refresh(record)
+    revalidate_in_transaction(session, record, confidence_threshold)
     session.commit()
     session.refresh(record)
     return record
 
 
-def apply_correction(
+def correct_in_transaction(
     session: Session,
     record: FinancialRecord,
     changes: dict[str, str | None],
     confidence_threshold: Decimal,
-) -> FinancialRecord:
-    """Merge the correction into raw_payload, then revalidate.
+) -> None:
+    """Merge the correction into raw_payload and revalidate. DOES NOT COMMIT.
+
+    Split out so several records can be corrected in ONE transaction. The
+    committing version below used to be the only one, and looping over it gave
+    a commit per record: a failure on the third left the first two written,
+    which is not what "nothing was modified" means.
+
+    Conventions §3.2 already said only the outermost service commits. Nothing
+    enforced it here because no caller ever chained two corrections.
 
     A corrected record can never stay VALIDATED: the status is always
     recomputed from the validation result.
@@ -162,7 +187,56 @@ def apply_correction(
     payload.update({key: value for key, value in changes.items()})
     record.raw_payload = payload
     _account_for_human_review(record, changes)
-    return revalidate_record(session, record, confidence_threshold)
+    revalidate_in_transaction(session, record, confidence_threshold)
+
+
+def apply_correction(
+    session: Session,
+    record: FinancialRecord,
+    changes: dict[str, str | None],
+    confidence_threshold: Decimal,
+) -> FinancialRecord:
+    """One record, one transaction: what the single-record route needs.
+
+    Locked like every other path: a correction can change `reference`, which is
+    exactly what `references_before` reads elsewhere.
+    """
+    lock_batch(session, record.batch_id)
+    session.refresh(record)
+    correct_in_transaction(session, record, changes, confidence_threshold)
+    session.commit()
+    session.refresh(record)
+    return record
+
+
+def apply_corrections(
+    session: Session,
+    records: Sequence[FinancialRecord],
+    changes: dict[str, str | None],
+    confidence_threshold: Decimal,
+) -> dict[str, int]:
+    """The same correction applied to several records, in ONE transaction.
+
+    Loops over the very function the single-record route uses. A bulk variant
+    that recomputed its own way would drift from the import path, and nothing
+    would say so on the day it did.
+    """
+    if records:
+        # One lock for the whole request: the route scopes it to a single batch,
+        # so there is no ordering problem and no deadlock to avoid.
+        lock_batch(session, records[0].batch_id)
+        for record in records:
+            session.refresh(record)
+
+    for record in records:
+        correct_in_transaction(session, record, changes, confidence_threshold)
+    session.commit()
+
+    by_status: dict[str, int] = {}
+    for record in records:
+        session.refresh(record)
+        by_status[record.status] = by_status.get(record.status, 0) + 1
+    return by_status
 
 
 def _account_for_human_review(record: FinancialRecord, changes: dict[str, str | None]) -> None:
@@ -199,7 +273,17 @@ def approve_record(session: Session, record: FinancialRecord) -> FinancialRecord
 
     VALIDATED is never derived by the engine -- it requires this explicit action,
     which is why `status` is not a writable field on the correction payload.
+
+    The lock comes BEFORE the check, and the record is refreshed under it. The
+    status was read into memory when the route loaded the record; a correction
+    committing in between makes that value stale, and the check would then pass
+    on a record the correction has just invalidated. Because SQLAlchemy only
+    writes the dirty column, the result was a record marked VALIDATED still
+    carrying its validation errors -- the one thing the assignment forbids.
     """
+    lock_batch(session, record.batch_id)
+    session.refresh(record)
+
     if record.status != RecordStatus.VALID.value:
         raise APIError(
             status.HTTP_409_CONFLICT,

@@ -7,17 +7,21 @@ route is `async`, so a single worker serialises it on the event loop, but
 nothing serialises it across workers.
 """
 
+import contextlib
 import inspect
 import threading
+import time
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.errors import APIError
 from app.models import FinancialRecord, ImportBatch
 from app.services.ingestion import persist_records
-from app.services.records import lock_batch_for_import
+from app.services.records import apply_correction, approve_record, lock_batch
+from tests.conftest import make_csv, upload_csv
 from tests.factories import make_raw
 
 THRESHOLD = Decimal("0.70")
@@ -33,7 +37,7 @@ def _import_in_thread(engine, batch_id, rows, barrier, failures):
             # The same two steps, in the same order, that run_extraction and the
             # CSV route perform. TestTheCallersTakeIt below is what checks they
             # really do.
-            lock_batch_for_import(session, batch_id)
+            lock_batch(session, batch_id)
             persist_records(
                 session,
                 batch,
@@ -155,7 +159,7 @@ class TestTheCallersTakeIt:
         from app.api import batches
 
         source = self._source(batches)
-        lock_at = source.index("lock_batch_for_import(session, batch.id)")
+        lock_at = source.index("lock_batch(session, batch.id)")
         store_at = source.index("document = store(")
         assert lock_at < store_at, (
             "the lock must be taken before store() inserts the source_document row, "
@@ -166,6 +170,67 @@ class TestTheCallersTakeIt:
         from app.services import pdf_extraction
 
         source = self._source(pdf_extraction)
-        lock_at = source.index("lock_batch_for_import(session, job.batch_id)")
+        lock_at = source.index("lock_batch(session, job.batch_id)")
         persist_at = source.index("by_status = persist_records(")
         assert lock_at < persist_at
+
+
+class TestApprovalAgainstAnInvalidatingCorrection:
+    """The race that breaks the assignment's own rule.
+
+    `validate` loads the record, then checks its status in memory. A correction
+    committing in between leaves that value stale, the check passes, and because
+    SQLAlchemy writes only the dirty column the result is a record marked
+    VALIDATED still carrying the errors the correction just found -- while the
+    assignment says a corrected record must be revalidated before it can become
+    VALIDATED.
+    """
+
+    @staticmethod
+    def _valid_record(client, batch) -> str:
+        upload_csv(client, batch["id"], make_csv([make_raw(reference="A-1")]), "one.csv")
+        page = client.get(f"/api/batches/{batch['id']}/records").json()
+        record = page["items"][0]
+        assert record["status"] == "VALID"
+        return record["id"]
+
+    def test_it_can_never_end_validated_with_errors(self, client, batch, engine, session):
+        record_id = self._valid_record(client, batch)
+        barrier = threading.Barrier(2, timeout=10)
+        failures: list[Exception] = []
+
+        def approve():
+            try:
+                with Session(engine) as own:
+                    # Loaded BEFORE the correction: this is the stale read.
+                    record = own.get(FinancialRecord, record_id)
+                    barrier.wait()
+                    time.sleep(0.15)
+                    # Refusing is the correct outcome, and the only other one
+                    # allowed is approving a record that has no errors.
+                    with contextlib.suppress(APIError):
+                        approve_record(own, record)
+            except Exception as error:  # noqa: BLE001 -- reported to the test
+                failures.append(error)
+
+        def invalidate():
+            try:
+                with Session(engine) as own:
+                    record = own.get(FinancialRecord, record_id)
+                    barrier.wait()
+                    apply_correction(own, record, {"country": "ZZZ"}, THRESHOLD)
+            except Exception as error:  # noqa: BLE001
+                failures.append(error)
+
+        threads = [threading.Thread(target=approve), threading.Thread(target=invalidate)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        assert not failures, f"a thread raised: {failures[0]!r}"
+
+        with Session(engine) as fresh:
+            record = fresh.get(FinancialRecord, record_id)
+            assert not (record.status == "VALIDATED" and record.validation_errors), (
+                f"approved while holding {len(record.validation_errors)} error(s)"
+            )

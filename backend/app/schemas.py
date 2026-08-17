@@ -9,7 +9,16 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
 def _serialize_money(value: Decimal | None) -> str | None:
@@ -23,6 +32,10 @@ def _serialize_money(value: Decimal | None) -> str | None:
 
 
 Money = Annotated[Decimal | None, PlainSerializer(_serialize_money, return_type=str | None)]
+
+# The request bounds its own size, like the page limit: a caller does not get
+# to decide how much the server holds at once.
+MAX_BULK_RECORDS = 200
 
 BUSINESS_FIELDS = (
     "reference",
@@ -202,6 +215,63 @@ class RecordPatch(BaseModel):
     category: str | None = None
     invoice_number: str | None = None
     payment_method: str | None = None
+
+
+class BulkRecordPatch(BaseModel):
+    """One correction, applied to several records of a single batch.
+
+    `changes` reuses RecordPatch, so `extra="forbid"` and the refusal to write
+    `status` hold here too. A bulk path that accepted what the single-record
+    path rejects would be a way round the rule rather than a second door to it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_ids: list[str] = Field(min_length=1, max_length=MAX_BULK_RECORDS)
+    changes: RecordPatch
+
+    @field_validator("record_ids")
+    @classmethod
+    def _no_duplicates(cls, value: list[str]) -> list[str]:
+        """Refused rather than deduplicated: `updated: 2` for one record would
+        be a lie, and silently collapsing the list hides a client bug."""
+        if len(set(value)) != len(value):
+            raise ValueError("record_ids contains duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def _changes_are_usable(self) -> "BulkRecordPatch":
+        """Checked here, not in the route.
+
+        A ValueError raised inside a handler is a 500; raised during validation
+        it is the 422 the client can act on. Both refusals below are about the
+        shape of the request, so this is where they belong.
+        """
+        changes = self.applied_changes()
+        if not changes:
+            raise ValueError("changes must name at least one field")
+        if "reference" in changes:
+            raise ValueError(
+                "reference cannot be corrected in bulk: one value across several "
+                "records creates duplicates by construction"
+            )
+        return self
+
+    def applied_changes(self) -> dict[str, str | None]:
+        """Only the fields actually sent.
+
+        Without `exclude_unset` every one of RecordPatch's fifteen fields comes
+        back, fourteen of them None, and a correction to one field would erase
+        the rest of the record.
+        """
+        return self.changes.model_dump(exclude_unset=True)
+
+
+class BulkCorrectionResult(BaseModel):
+    """What the click actually unblocked -- the number a reviewer is after."""
+
+    updated: int
+    by_status: dict[str, int]
 
 
 class ImportResult(BaseModel):

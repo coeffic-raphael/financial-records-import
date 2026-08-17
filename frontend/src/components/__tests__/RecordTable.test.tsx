@@ -136,3 +136,51 @@ describe("field-level errors", () => {
     expect(screen.queryByRole("button", { name: /issue/ })).toBeNull();
   });
 });
+
+
+describe("selecting rows", () => {
+  const onToggle = vi.fn();
+
+  function withSelection(enabled = true) {
+    onToggle.mockReset();
+    render(
+      <MemoryRouter>
+        <RecordTable
+          records={[makeRecord()]}
+          selection={{ selected: new Set(), onToggle, enabled }}
+        />
+      </MemoryRouter>
+    );
+    return screen.getByRole("checkbox");
+  }
+
+  it("ticks the box without opening the record", () => {
+    const box = withSelection();
+    fireEvent.click(box);
+
+    expect(onToggle).toHaveBeenCalledWith("rec-1");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not open the record from the keyboard either", () => {
+    /* The row opens on Enter AND on Space -- and Space is the key that ticks a
+       checkbox. Stopping the click alone left the keyboard path navigating. */
+    const box = withSelection();
+    fireEvent.keyDown(box, { key: " " });
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("is disabled while the page is being replaced", () => {
+    expect((withSelection(false) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("offers no checkbox when the table is not selectable", () => {
+    render(
+      <MemoryRouter>
+        <RecordTable records={[makeRecord()]} />
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+});

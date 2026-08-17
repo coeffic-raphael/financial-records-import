@@ -18,6 +18,14 @@ vi.mock("../../hooks/useApi", () => ({
   useJobs: () => idle,
   useUploadCsv: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
   useUploadPdfs: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+  useCorrectRecords: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    data: undefined,
+    error: null,
+  }),
   useRecords,
 }));
 

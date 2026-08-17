@@ -18,7 +18,7 @@ from app.domain.enums import JobStatus, SourceType
 from app.models import ExtractionJob, ImportBatch, SourceDocument
 from app.providers.base import ExtractionProvider, ProviderError
 from app.services.ingestion import persist_records
-from app.services.records import lock_batch_for_import
+from app.services.records import lock_batch
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def _run(
 
             # Taken here, after the model call, so two extractions run in
             # parallel and only their short persistence phase serialises.
-            lock_batch_for_import(session, job.batch_id)
+            lock_batch(session, job.batch_id)
 
             # Even a partial extraction is kept: usable records are persisted,
             # incomplete ones become NEEDS_REVIEW rather than being discarded.
