@@ -38,6 +38,22 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          # POSTGRES_USER matters: without it the image creates the role
+          # `postgres`, and every URL below authenticating as `app` fails.
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: financial_records_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -53,7 +69,17 @@ jobs:
 
       # -m "not live" excludes tests that call a real AI provider. No repository
       # secret is needed: the suite is hermetic by design.
+      #
+      # Two URLs, deliberately different. DATABASE_URL only has to parse: the
+      # module-level engine is built at import, so pytest cannot even collect
+      # without it, and no test uses it -- sessions come from dependency
+      # overrides. DATABASE_URL_TEST is the one the suite empties, and the
+      # harness refuses to run if the two are equal or if its database name
+      # does not end in _test.
       - name: Tests
+        env:
+          DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/postgres
+          DATABASE_URL_TEST: postgresql+psycopg://app:app@localhost:5432/financial_records_test
         run: pytest -m "not live"
 
   migrations:
@@ -62,8 +88,26 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Here DATABASE_URL points at the database Alembic must actually touch,
+    # which is why it is set on the job rather than shared with the test job.
     env:
-      DATABASE_URL: sqlite:///./ci_migration_check.db
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/financial_records_test
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          # POSTGRES_USER matters: without it the image creates the role
+          # `postgres`, and every URL below authenticating as `app` fails.
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: financial_records_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,8 +116,9 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
 
-      # Also proves the schema builds from nothing, which is what makes the
-      # PostgreSQL portability claim verifiable rather than merely asserted.
+      # On the real engine, from nothing. Two of these migrations once failed
+      # here -- one called a function the engine does not have, one dropped a
+      # constraint it could not name -- which is what this step exists to catch.
       - name: Upgrade from an empty database
         run: alembic upgrade head
 
@@ -82,6 +127,13 @@ jobs:
       # then talks to the ORM, so the mismatch only surfaces on deployment.
       - name: No undeclared model changes
         run: alembic check
+
+      # A migration that cannot be undone is a migration you cannot deploy
+      # twice. The round trip proves every downgrade names what it drops.
+      - name: Downgrade to empty and back
+        run: |
+          alembic downgrade base
+          alembic upgrade head
 
   frontend:
     name: Frontend — types, tests and build

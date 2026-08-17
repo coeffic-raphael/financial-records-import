@@ -1,0 +1,72 @@
+# Local demonstration stack. `docker compose up` from a clean clone, no .env,
+# no API key: the API generates an ephemeral signing secret in debug mode and
+# extraction falls back to the mock provider.
+#
+# Not a production deployment. DEBUG, a known password and a secret that changes
+# on every restart are acceptable here and nowhere else.
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: financial_records
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # depends_on alone only waits for the container to start. Without this the
+      # API races the cluster's first-boot initialisation and the migrations
+      # fail about half the time -- on someone else's machine, never your own.
+      test: ["CMD-SHELL", "pg_isready -U app -d financial_records"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    # Your own settings, if you have them. Optional, so a clean clone still
+    # starts. This is where a real GEMINI_API_KEY and EXTRACTION_PROVIDER=gemini
+    # come from -- without it the stack can only run the mock provider.
+    env_file:
+      - path: ./backend/.env
+        required: false
+    # Everything here OVERRIDES the file above, and must: these describe where
+    # the service runs, not what it is configured to do. A DATABASE_URL pointing
+    # at localhost is correct on your machine and wrong inside the network.
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/financial_records
+      UPLOAD_STORAGE_DIR: /app/uploads
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      COOKIE_SECURE: "false"          # the stack speaks plain HTTP locally
+      # In debug the application generates an ephemeral signing secret when none
+      # is set, which is what lets a clean clone start with no .env at all. A
+      # JWT_SECRET in your .env is picked up and keeps sessions across restarts.
+      DEBUG: "true"
+    volumes:
+      # Documents outlive the container. Without this, `docker compose down`
+      # would leave source_document rows pointing at files that no longer exist,
+      # and the reviewer's "open the source document" button would 404.
+      - uploads:/app/uploads
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+
+volumes:
+  pgdata:
+  uploads:

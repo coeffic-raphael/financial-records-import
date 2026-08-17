@@ -6,13 +6,18 @@ Imports, extracts, validates, corrects and approves financial records from **CSV
 and **PDF** sources. CSV rows and AI-extracted PDF content converge on a single
 normalized model.
 
+> **Docker is required.** The application runs on PostgreSQL only — there is no
+> SQLite fallback — and `docker compose up` is the supported way to start it,
+> tests included. See [Setup](#setup).
+
 > **Work in progress.** This README will be replaced by the full documentation
 > once the application is feature-complete. See [Current state](#current-state).
 
 ## Signing in
 
-The API requires authentication. Two demonstration accounts are created by
-`make seed`:
+The API requires authentication. Registration is open, so the quickest path is
+to create an account from the interface. `make seed` also creates two
+demonstration accounts:
 
 | Email | Password |
 |---|---|
@@ -120,25 +125,57 @@ memory at once, since each is read only once its turn comes.
 
 ## Requirements
 
-- Python 3.11+
+- **Docker** (Desktop, or an engine with the compose plugin)
+- Python 3.11+ and Node 22+, only if you intend to run the suites outside the
+  containers
 
 ## Setup
 
-Every command below is run from the `backend/` directory.
-
 ```bash
-cd backend
-make install
-cp .env.example .env
+docker compose up --build
 ```
 
-That is enough to start: the template runs in debug with the mock extraction
-provider, so **no credential of any kind is required** to exercise the full
-workflow.
+From a clean clone, with no `.env` and no API key. The stack is:
 
-For anything beyond local use, set a real `JWT_SECRET` of at least 32
-characters — the application refuses to start otherwise rather than signing
-tokens with a weak key:
+| Service | Address | What it is |
+|---|---|---|
+| `web` | http://localhost:5173 | The React interface |
+| `api` | http://localhost:8000 | FastAPI; applies the migrations at startup |
+| `db` | localhost:5432 | PostgreSQL 17, with a second `_test` database for the suite |
+
+Two things make that first command enough. In debug the application **generates
+an ephemeral signing secret**, so no `JWT_SECRET` is needed — at the cost of
+invalidating open sessions on every restart, which is why it is a local mode and
+not a deployment. And `EXTRACTION_PROVIDER=mock` means the whole workflow is
+exercisable with **no credential of any kind**.
+
+Documents and database both live on named volumes, so `docker compose down` and
+`up` again leaves your batches and their source files intact. `down -v` is what
+discards them.
+
+### Real extraction, and your own settings
+
+The `api` service loads `backend/.env` **if it exists**, and ignores its absence.
+So the same `docker compose up` runs on the mock provider from a clean clone,
+and on Gemini once you have a key:
+
+```bash
+cp backend/.env.example backend/.env   # then fill in EXTRACTION_PROVIDER and the key
+docker compose up -d --force-recreate api
+```
+
+What that file cannot change is where the service runs. `DATABASE_URL`,
+`UPLOAD_STORAGE_DIR` and `CORS_ALLOWED_ORIGINS` are set in `docker-compose.yml`
+and override the file: a `DATABASE_URL` pointing at `localhost` is right on your
+machine and wrong inside the container network, so the two must not be confused.
+
+The precedence, lowest to highest: the image's own `ENV` (which is what makes
+`mock` the fallback), then `backend/.env`, then `docker-compose.yml`.
+
+### Beyond local use
+
+Set a real `JWT_SECRET` of at least 32 characters — the application refuses to
+start otherwise rather than signing tokens with a weak key:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -148,35 +185,45 @@ For real PDF extraction, set `EXTRACTION_PROVIDER=gemini` and a
 `GEMINI_API_KEY`. A misconfigured provider also stops startup, rather than
 failing on someone's first upload.
 
+### Running the suites outside the containers
+
+The backend suite needs two distinct URLs. `DATABASE_URL` only has to parse —
+the module-level engine is built at import — while `DATABASE_URL_TEST` names the
+database the tests empty. The harness refuses to start if the two are equal, or
+if the test database name does not end in `_test`.
+
+```bash
+cd backend
+export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/financial_records
+export DATABASE_URL_TEST=postgresql+psycopg://app:app@localhost:5432/financial_records_test
+pytest
+```
+
 ## Run
 
-Two servers, one per terminal.
+`docker compose up` from [Setup](#setup) already runs everything. Open
+<http://localhost:5173>, register an account, and the API's own documentation is
+at <http://localhost:8000/docs>.
 
-**Backend**, from `backend/`:
+### Developing outside the containers
 
-```bash
-make seed
-make run
-```
-
-**Frontend**, from `frontend/`:
+Useful when you want reload-on-save. Keep the database in Docker and run the two
+servers on the host:
 
 ```bash
-npm install
-cp .env.example .env
-npm run dev
+docker compose up -d db          # PostgreSQL only
+cd backend && make seed && make run
+cd frontend && npm install && npm run dev
 ```
 
-Then open <http://localhost:5173> and sign in with one of the demo accounts
-above. The API's own documentation stays available at
-<http://localhost:8000/docs>.
+`make seed` creates the two demonstration accounts listed under
+[Signing in](#signing-in). It needs `DATABASE_URL` in `backend/.env`; copy
+`.env.example`, which already points at the compose database.
 
 The frontend runs on a different origin from the API on purpose rather than
 behind a dev proxy: a proxy would put both on one origin and hide the CORS
 configuration and cookie rules that ship, so nobody would exercise them until
 production.
-
-Interactive API documentation is generated at <http://localhost:8000/docs>.
 
 ## Upgrading an existing database
 
@@ -207,16 +254,23 @@ workspace left without an account, so nothing disappears silently.
 ## Tests
 
 ```bash
-make test          # backend, from backend/
+docker compose up -d db     # the suite needs a database
+cd backend && make test
 ```
+
+`make test` supplies both URLs the harness requires. They are in the Makefile
+rather than defaulted in the code, because the suite truncates every table in
+`DATABASE_URL_TEST` and which database that is should be readable, not inferred.
+The harness refuses to run if it equals `DATABASE_URL` or if its name does not
+end in `_test`.
 
 ```bash
 npm run build      # frontend types and build, from frontend/
 npx vitest run     # frontend tests
 ```
 
-The backend suite is **hermetic**: no network, no API key, no external service, and no
-billable API call. Tests that talk to a real provider are excluded by default,
+The backend suite needs PostgreSQL and nothing else: **no network, no API key,
+no billable call**. Tests that talk to a real provider are excluded by default,
 not merely marked — a mark enables selection, it does not deselect.
 
 Run them deliberately, with a key configured:
@@ -247,8 +301,9 @@ test asserts the exact set of error codes for every row.
 - Authentication: Argon2id, short-lived access tokens kept in memory, rotating
   refresh tokens with reuse detection
 - Tenant scoping on every query, with cross-tenant access returning `404`
-- Alembic migrations, applied by the test suite from an empty database (SQLite;
-  PostgreSQL portability is claimed, not yet verified in CI)
+- PostgreSQL only, in Docker. Alembic migrations are applied from an empty
+  database by the test suite, by the API container at startup, and by CI —
+  which also downgrades to empty and back, so every revision is reversible
 - PDF extraction through Gemini, with an OpenAI fallback, per-field confidence,
   token accounting and background processing
 - React interface covering the whole workflow: sign-in, batches, upload,
@@ -258,8 +313,8 @@ test asserts the exact set of error codes for every row.
 
 **Not yet**
 
-- Docker Compose, and the PostgreSQL run that would make the portability above
-  a fact rather than a claim
+- Nothing from the assignment's scope. Remaining items are listed under
+  [Production improvements](#production-improvements).
 
 ## Production improvements
 
