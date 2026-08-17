@@ -13,6 +13,8 @@ can put either in front, so testing only one leaves the other unproven exactly
 when it is needed -- as the second link, after the first has failed.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from app.config import get_settings
@@ -152,3 +154,36 @@ def test_the_primary_reads_every_statement_row():
     assert len(result.records) == 8
     references = {record.get("reference") for record in result.records}
     assert references == {f"STM-77{n}" for n in range(11, 19)}
+
+
+@pytest.mark.skipif(not settings.openai_api_key, reason="OPENAI_API_KEY is not configured")
+def test_the_breakdown_is_filled_only_where_nothing_can_hide():
+    """The two rows that settle an external document must keep their breakdown
+    empty, and the other six must carry it.
+
+    STM-7713 is 4,680.00 while the supplied invoice reads 3,900.00 + 780.00 of
+    VAT; STM-7716 is 5,616.00 while the supplied CSV carries 4,800.00 + 816.00.
+    Filling gross = net there would satisfy net == gross + tax - fee, so the
+    record would pass as VALID carrying a figure the assignment contradicts --
+    a wrong answer that validation cannot catch.
+
+    Pinned live because this drifted before: the same row once returned gross
+    null on one call and gross = net on the next.
+    """
+    provider = OpenAIProvider(
+        settings.openai_api_key, settings.openai_model, settings.extraction_timeout_seconds
+    )
+    result = extract(provider, "bank_statement_july_2026.pdf")
+    by_reference = {record.get("reference"): record for record in result.records}
+
+    for reference in ("STM-7713", "STM-7716"):
+        record = by_reference[reference]
+        assert record.get("gross_amount") in (None, ""), (
+            f"{reference} settles an external document: its breakdown is not on the statement."
+        )
+
+    for reference in ("STM-7711", "STM-7712", "STM-7714", "STM-7715", "STM-7717", "STM-7718"):
+        record = by_reference[reference]
+        assert Decimal(str(record["gross_amount"]).replace(",", "")) == Decimal(
+            str(record["net_amount"]).replace(",", "")
+        ), f"{reference} is the whole transaction: gross must equal net."

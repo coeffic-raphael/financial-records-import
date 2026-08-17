@@ -31,6 +31,9 @@ EXTRACTION_FIELDS = (
 )
 
 
+ABSENT_WRITTEN_OUT = frozenset({"null", "none", "n/a", "nil", "undefined"})
+
+
 class ExtractedField(BaseModel):
     """A value together with how sure the model is about it."""
 
@@ -43,6 +46,23 @@ class ExtractedField(BaseModel):
         le=1.0,
         description="Certainty for this field alone, from 0.0 to 1.0.",
     )
+
+    # A model asked for "null if absent" sometimes writes the WORD instead of a
+    # JSON null -- observed on fee_amount of the supplied legal invoice. That
+    # string then reaches the domain, where "null" is not a number, and a
+    # correctly extracted invoice collects a NOT_NUMERIC error on a field that
+    # is legitimately empty and lands in NEEDS_REVIEW for nothing.
+    #
+    # Corrected HERE, at the provider boundary, and deliberately not in
+    # normalization: a CSV cell containing the text "null" is a real data
+    # problem and must keep being reported. This is an artifact of one
+    # transport, so it is repaired where that transport ends.
+    @field_validator("value", mode="before")
+    @classmethod
+    def _absent_written_as_a_word(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() in ABSENT_WRITTEN_OUT:
+            return None
+        return value
 
     @field_validator("confidence", mode="before")
     @classmethod
@@ -156,11 +176,20 @@ Rules, in order of importance:
    - running Balance column    -> IGNORE it entirely. It is the account total
      after the row, not the value of the row.
 
-   gross_amount, tax_amount and fee_amount are NULL on a statement row unless
-   that row states them itself. A row shows what was settled, not how it was
-   composed: writing gross = net asserts there was no tax, which the document
-   never says. Rule 1 applies -- an absent breakdown is expected and handled,
-   a guessed one is not.
+   gross_amount, tax_amount and fee_amount on a statement row:
+
+   - If the row's description references an EXTERNAL DOCUMENT -- an invoice
+     number, an audit or fee reference such as "INV-LX-441" or "APL-Q2-2026" --
+     the amount settles that document, and its breakdown lives THERE, not on
+     the statement. Leave gross_amount, tax_amount and fee_amount null. A
+     settled total often includes VAT you cannot see here, and writing
+     gross = net would silently assert there was none.
+   - Otherwise the row is the whole transaction and nothing was withheld from
+     it: set gross_amount = the same value as net_amount, tax_amount = 0 and
+     fee_amount = 0.
+
+   Rule 1 still governs: when you are unsure whether a breakdown exists,
+   leave the three fields null rather than guess them.
 
 5. A statement header describes the ACCOUNT, not the counterparty.
 

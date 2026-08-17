@@ -566,11 +566,21 @@ as "ISO alpha-2 country code" without saying whose. It is therefore taken from
 the account's IBAN, while `counterparty_account` stays empty because its name
 says whose account it is.
 
-**A statement row states what was settled, not how it was composed.** So
-`gross_amount`, `tax_amount` and `fee_amount` stay empty unless the row itself
-gives them. Writing `gross = net` asserts there was no tax, which the document
-never says — and the invoice for one of those rows proves it wrong: 4,680.00 on
-the statement is 3,900.00 plus 780.00 of VAT.
+**A statement row that settles an external document hides its own breakdown.**
+Two of the eight supplied rows prove it: STM-7713 is 4,680.00, and the supplied
+invoice reads 3,900.00 plus 780.00 of VAT; STM-7716 is 5,616.00, and the
+supplied CSV carries that same total as 4,800.00 plus 816.00. The statement
+shows only the settled figure.
+
+So the breakdown is filled **only when the row references no external
+document** — no invoice number, no audit reference. There, the row is the whole
+transaction: `gross_amount` takes the row's amount, `tax_amount` and
+`fee_amount` are 0, which is what the data dictionary defines as their default.
+On the two rows above the three fields stay empty, because writing `gross = net`
+would assert there was no tax *and still satisfy*
+`net == gross + tax - fee` — the record would pass as `VALID` carrying a figure
+the assignment itself contradicts. Measured over three runs, the model applies
+the distinction correctly on all eight rows.
 
 **`payment_method` is optional**, per the dictionary. This is why one sample row
 without it is `VALID` rather than flagged.
@@ -649,10 +659,12 @@ and the application degrades into it safely: a short extraction lands in
 cheap tier lost nothing on the hardest supplied document, not enough to prove it
 never would on an unseen one. §5 states the measurement and its size.
 
-**Two required fields will always be empty on a statement**, per §6. Every
-statement row therefore needs human input before it can be approved. That is
-the assignment's own rule working, not a defect — and bulk correction exists so
-the cost is one entry rather than eight.
+**`counterparty_name` is always empty on a statement**, per §6: a row reads
+"Custody charges", never who was paid. Every statement row therefore needs human
+input before it can be approved — the assignment's own rule working, not a
+defect — and bulk correction exists so the cost is one entry rather than eight.
+On the two rows that settle an external document, `gross_amount` needs an entry
+too.
 
 **Adding accounts to a database that predates them is refused.** Batches used to
 belong to a workspace with no user, and a workspace with no account cannot be
@@ -731,7 +743,7 @@ done. Development then followed that plan rather than improvising, and each
 stage was reviewed by Codex once implemented.
 
 A large part of the test suite was generated with Claude Code: the 564 hermetic
-backend tests, the 11 live provider cases, and the 132 frontend tests.
+backend tests, the 12 live provider cases, and the 132 frontend tests.
 
 The plans live in `docs/plans/`, which is not committed.
 
