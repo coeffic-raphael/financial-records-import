@@ -137,13 +137,46 @@ Rules, in order of importance:
 
 2. How many records:
    - a supplier invoice produces exactly ONE record;
-   - a bank statement produces ONE RECORD PER TRANSACTION LINE.
+   - a bank statement produces ONE RECORD PER TRANSACTION ROW.
 
-3. On a bank statement, take the per-line transaction Amount.
-   NEVER take the running Balance column: it is the account total after the
-   line, not the value of the line.
+3. A bank statement is a TABLE. Read it row by row:
+   - each data row is one transaction and becomes exactly ONE record;
+   - if the table holds 8 data rows, return 8 records -- not 1, not 2;
+   - NEVER merge two rows into a single record;
+   - NEVER put two cells in one field. Every field takes the value of ONE cell
+     of ONE row. A date like "2026-07-0101/07/2026" is two cells concatenated
+     and is always wrong.
 
-4. Amount mapping, which is the part most often got wrong:
+4. Typical statement columns map like this:
+   - booking date column       -> transaction_date
+   - value date column         -> value_date
+   - reference column          -> reference
+   - description column        -> description
+   - per-row amount column     -> net_amount, keeping its sign
+   - running Balance column    -> IGNORE it entirely. It is the account total
+     after the row, not the value of the row.
+
+   gross_amount, tax_amount and fee_amount are NULL on a statement row unless
+   that row states them itself. A row shows what was settled, not how it was
+   composed: writing gross = net asserts there was no tax, which the document
+   never says. Rule 1 applies -- an absent breakdown is expected and handled,
+   a guessed one is not.
+
+5. A statement header describes the ACCOUNT, not the counterparty.
+
+   "Account holder: X" is the owner of the account -- one side of every
+   transaction. The counterparty is the OTHER side, so X is never it, and the
+   account's own IBAN is not the counterparty's account. If a row does not name
+   the other party, counterparty_name and counterparty_account are null.
+
+   What a header DOES supply to every row:
+   - the currency, when the rows do not repeat it;
+   - country, from the account's own IBAN. The data dictionary names this field
+     `country`, not `counterparty_country`, and defines it as "ISO alpha-2
+     country code" without saying whose -- unlike the two fields above, which
+     carry the counterparty prefix and its meaning with it.
+
+6. Amount mapping, which is the part most often got wrong:
    - gross_amount: the amount BEFORE tax and fees (an invoice subtotal);
    - tax_amount: VAT or other tax, 0 if none;
    - fee_amount: fees charged, 0 if none;
@@ -151,19 +184,19 @@ Rules, in order of importance:
    For an invoice this means gross_amount is the subtotal, NOT the grand total.
    Keep the sign: money leaving the account is negative.
 
-5. currency must be one of: {", ".join(c.value for c in Currency)}.
+7. currency must be one of: {", ".join(c.value for c in Currency)}.
 
-6. category must be exactly one of: {", ".join(c.value for c in Category)}.
+8. category must be exactly one of: {", ".join(c.value for c in Category)}.
    Choose OTHER rather than inventing a value.
 
-7. payment_method, when stated, must be one of:
+9. payment_method, when stated, must be one of:
    {", ".join(p.value for p in PaymentMethod)}. Otherwise null.
 
-8. country: ISO 3166-1 alpha-2 of the counterparty. On an invoice this is the
-   supplier's country.
+10. country: ISO 3166-1 alpha-2. On an invoice this is the supplier's country;
+   on a statement it is the account's, per rule 5.
 
-9. Dates as YYYY-MM-DD when the document allows it.
+11. Dates as YYYY-MM-DD when the document allows it.
 
-10. confidence is per field: how certain you are of THAT value. Use a low value
+12. confidence is per field: how certain you are of THAT value. Use a low value
     when you inferred or reformatted rather than read it directly.
 """

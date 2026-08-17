@@ -79,7 +79,40 @@ class TestRecordConfidence:
 class TestPrompt:
     def test_states_the_balance_trap(self):
         """The statement's Balance column is the mistake most likely to be made."""
-        assert "NEVER take the running Balance" in EXTRACTION_PROMPT
+        assert "running Balance column    -> IGNORE it entirely" in EXTRACTION_PROMPT
+
+    def test_separates_the_account_holder_from_the_counterparty(self):
+        """The header names the account owner, which is the one party that can
+        never be the counterparty. Filling it in would turn every statement row
+        VALID -- counterparty_name and country are the only fields blocking
+        them -- while carrying the wrong name."""
+        assert "describes the ACCOUNT, not the counterparty" in EXTRACTION_PROMPT
+        assert "so X is never it" in EXTRACTION_PROMPT
+
+    def test_allows_the_header_to_supply_currency_and_country(self):
+        """The propagation that IS correct.
+
+        `country` is deliberately included and `counterparty_name` is not. The
+        data dictionary names the first `country` and defines it as "ISO alpha-2
+        country code" without saying whose; the second carries the counterparty
+        prefix and the meaning that comes with it."""
+        assert "the currency, when the rows do not" in EXTRACTION_PROMPT
+        assert "country, from the account's own IBAN" in EXTRACTION_PROMPT
+        assert "not `counterparty_country`" in EXTRACTION_PROMPT
+
+    def test_forbids_guessing_the_amount_breakdown_on_a_statement(self):
+        """Observed drift: the same statement row came back with gross null on
+        one call and gross = net on another. The second is a guess -- it asserts
+        there was no tax -- and it removes a blocker, so a row that named its
+        counterparty would go VALID on an invented breakdown."""
+        assert "are NULL on a statement row unless" in EXTRACTION_PROMPT
+        assert "writing gross = net asserts there was no tax" in EXTRACTION_PROMPT
+
+    def test_forbids_merging_rows_and_cells(self):
+        """Observed failure: eight statement rows collapsed into one record,
+        with two date cells concatenated into a single field."""
+        assert "NEVER merge two rows" in EXTRACTION_PROMPT
+        assert "NEVER put two cells in one field" in EXTRACTION_PROMPT
 
     def test_forbids_inventing_values(self):
         assert "NEVER invent a value" in EXTRACTION_PROMPT
