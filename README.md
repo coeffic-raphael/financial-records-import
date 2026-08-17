@@ -6,12 +6,102 @@ Imports, extracts, validates, corrects and approves financial records from **CSV
 and **PDF** sources. CSV rows and AI-extracted PDF content converge on a single
 normalized model.
 
-> **Docker is required.** The application runs on PostgreSQL only — there is no
-> SQLite fallback — and `docker compose up` is the supported way to start it,
-> tests included. See [Setup](#setup).
-
 > **Work in progress.** This README will be replaced by the full documentation
 > once the application is feature-complete. See [Current state](#current-state).
+
+## Getting started
+
+Three things: run it, test it, and — only if you want real AI extraction —
+give it a key.
+
+### 1. Run the platform
+
+```bash
+docker compose up --build
+```
+
+That is the whole command. From a **clean clone, with no `.env` and no API key**:
+
+| | Address | |
+|---|---|---|
+| Interface | http://localhost:5173 | Sign in, or register — registration is open |
+| API | http://localhost:8000 | Applies its migrations at startup |
+| API docs | http://localhost:8000/docs | Generated from the code |
+| Database | localhost:5432 | PostgreSQL 17 |
+
+Two choices make the first run credential-free: in debug the application
+**generates a signing secret** at startup, and extraction falls back to a
+**mock provider** that returns canned records. The whole workflow — import,
+validate, correct, approve — is exercisable without an account anywhere.
+
+Your data survives a restart: the database and the uploaded documents live on
+named volumes, so `docker compose down` then `up` finds your batches intact.
+`down -v` is what throws them away.
+
+**Docker is required.** The application runs on PostgreSQL only; there is no
+SQLite fallback.
+
+### 2. Run the tests
+
+The backend suite needs a database, so start that one service first:
+
+```bash
+docker compose up -d db
+
+cd backend && make test        # 562 tests
+cd frontend && npm ci && npm test   # 132 tests
+```
+
+`make test` supplies the two database URLs itself. They are written in the
+Makefile rather than defaulted in the code, because the suite **empties every
+table** in the test database — which one that is should be readable, not
+guessed. The harness refuses to start if that URL matches the application's, or
+if its database name does not end in `_test`.
+
+Tests that call a real AI provider are excluded by default. Run them
+deliberately, with a key configured:
+
+```bash
+cd backend && make test-live
+```
+
+### 3. Credentials and environment variables
+
+**No real credential is in this repository, and none can be.** `.env` is
+git-ignored, and CI scans the whole history with `gitleaks` on every push — a
+key committed by accident fails the build rather than sitting there.
+
+What is committed is `backend/.env.example` and `frontend/.env.example`:
+templates with every variable documented and every secret **left empty**. Copy
+one when you need it:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+The variables that matter:
+
+| Variable | Needed when | What happens without it |
+|---|---|---|
+| `EXTRACTION_PROVIDER` | you want real PDF extraction | Falls back to `mock`; the workflow still runs end to end |
+| `OPENAI_API_KEY` | `EXTRACTION_PROVIDER=openai` | The application **refuses to start**, rather than failing on someone's first upload |
+| `GEMINI_API_KEY` | `EXTRACTION_PROVIDER=gemini`, or as the fallback link | Same |
+| `JWT_SECRET` | anywhere but local debug | In debug, an ephemeral one is generated — which invalidates open sessions on every restart, and is why it is a local mode and not a deployment |
+| `DATABASE_URL` | always | No default at all: a wrong default would silently point a deployment at the wrong database |
+
+**One rule about the frontend**: `frontend/.env` may hold exactly one variable,
+the API address. Every `VITE_*` value is compiled into the JavaScript sent to
+the browser, where anyone can read it. That is publication, not configuration,
+so no provider key ever belongs there. Extraction is server-side only; the
+interface does not even know which provider is used.
+
+Generate a real signing secret with:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+---
 
 ## Signing in
 
@@ -184,102 +274,39 @@ becomes resident. Extraction concurrency is capped, because provider quotas are
 counted in requests per minute — which also caps how many documents are in
 memory at once, since each is read only once its turn comes.
 
-## Requirements
+## Configuration in depth
 
-- **Docker** (Desktop, or an engine with the compose plugin)
-- Python 3.11+ and Node 22+, only if you intend to run the suites outside the
-  containers
+[Getting started](#getting-started) covers the common path. This is the part
+that bites once you change something.
 
-## Setup
+**What `backend/.env` cannot decide.** The `api` service loads it when present
+and ignores its absence — that is how a clean clone starts. But
+`DATABASE_URL`, `UPLOAD_STORAGE_DIR` and `CORS_ALLOWED_ORIGINS` are set in
+`docker-compose.yml` and **override** it. A `DATABASE_URL` pointing at
+`localhost` is right on your machine and wrong inside the container network, so
+your file decides *what* the application does and the compose file decides
+*where* it runs.
 
-```bash
-docker compose up --build
-```
-
-From a clean clone, with no `.env` and no API key. The stack is:
-
-| Service | Address | What it is |
-|---|---|---|
-| `web` | http://localhost:5173 | The React interface |
-| `api` | http://localhost:8000 | FastAPI; applies the migrations at startup |
-| `db` | localhost:5432 | PostgreSQL 17, with a second `_test` database for the suite |
-
-Two things make that first command enough. In debug the application **generates
-an ephemeral signing secret**, so no `JWT_SECRET` is needed — at the cost of
-invalidating open sessions on every restart, which is why it is a local mode and
-not a deployment. And `EXTRACTION_PROVIDER=mock` means the whole workflow is
-exercisable with **no credential of any kind**.
-
-Documents and database both live on named volumes, so `docker compose down` and
-`up` again leaves your batches and their source files intact. `down -v` is what
-discards them.
-
-### Real extraction, and your own settings
-
-The `api` service loads `backend/.env` **if it exists**, and ignores its absence.
-So the same `docker compose up` runs on the mock provider from a clean clone,
-and on Gemini once you have a key:
+Precedence, lowest to highest: the image's own `ENV` — which is what makes
+`mock` the fallback — then `backend/.env`, then `docker-compose.yml`.
 
 ```bash
-cp backend/.env.example backend/.env   # then fill in EXTRACTION_PROVIDER and the key
+cp backend/.env.example backend/.env   # fill in EXTRACTION_PROVIDER and a key
 docker compose up -d --force-recreate api
 ```
 
-What that file cannot change is where the service runs. `DATABASE_URL`,
-`UPLOAD_STORAGE_DIR` and `CORS_ALLOWED_ORIGINS` are set in `docker-compose.yml`
-and override the file: a `DATABASE_URL` pointing at `localhost` is right on your
-machine and wrong inside the container network, so the two must not be confused.
-
-The precedence, lowest to highest: the image's own `ENV` (which is what makes
-`mock` the fallback), then `backend/.env`, then `docker-compose.yml`.
-
-### Beyond local use
-
-Set a real `JWT_SECRET` of at least 32 characters — the application refuses to
-start otherwise rather than signing tokens with a weak key:
+**Developing outside the containers.** Useful when you want reload-on-save.
+Keep the database in Docker and run the two servers on the host:
 
 ```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-For real PDF extraction, set `EXTRACTION_PROVIDER=gemini` and a
-`GEMINI_API_KEY`. A misconfigured provider also stops startup, rather than
-failing on someone's first upload.
-
-### Running the suites outside the containers
-
-The backend suite needs two distinct URLs. `DATABASE_URL` only has to parse —
-the module-level engine is built at import — while `DATABASE_URL_TEST` names the
-database the tests empty. The harness refuses to start if the two are equal, or
-if the test database name does not end in `_test`.
-
-```bash
-cd backend
-export DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/financial_records
-export DATABASE_URL_TEST=postgresql+psycopg://app:app@localhost:5432/financial_records_test
-pytest
-```
-
-## Run
-
-`docker compose up` from [Setup](#setup) already runs everything. Open
-<http://localhost:5173>, register an account, and the API's own documentation is
-at <http://localhost:8000/docs>.
-
-### Developing outside the containers
-
-Useful when you want reload-on-save. Keep the database in Docker and run the two
-servers on the host:
-
-```bash
-docker compose up -d db          # PostgreSQL only
+docker compose up -d db
 cd backend && make seed && make run
 cd frontend && npm install && npm run dev
 ```
 
 `make seed` creates the two demonstration accounts listed under
-[Signing in](#signing-in). It needs `DATABASE_URL` in `backend/.env`; copy
-`.env.example`, which already points at the compose database.
+[Signing in](#signing-in), and needs `DATABASE_URL` in `backend/.env`;
+`.env.example` already points at the compose database.
 
 The frontend runs on a different origin from the API on purpose rather than
 behind a dev proxy: a proxy would put both on one origin and hide the CORS
@@ -311,34 +338,6 @@ Accepting the consequence is a deliberate act. `make seed` also reports any
 workspace left without an account, so nothing disappears silently.
 
 **A fresh installation is unaffected** and needs none of this.
-
-## Tests
-
-```bash
-docker compose up -d db     # the suite needs a database
-cd backend && make test
-```
-
-`make test` supplies both URLs the harness requires. They are in the Makefile
-rather than defaulted in the code, because the suite truncates every table in
-`DATABASE_URL_TEST` and which database that is should be readable, not inferred.
-The harness refuses to run if it equals `DATABASE_URL` or if its name does not
-end in `_test`.
-
-```bash
-npm run build      # frontend types and build, from frontend/
-npx vitest run     # frontend tests
-```
-
-The backend suite needs PostgreSQL and nothing else: **no network, no API key,
-no billable call**. Tests that talk to a real provider are excluded by default,
-not merely marked — a mark enables selection, it does not deselect.
-
-Run them deliberately, with a key configured:
-
-```bash
-make test-live
-```
 
 ## Sample files
 
