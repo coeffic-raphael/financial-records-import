@@ -12,7 +12,11 @@ WORKDIR /app
 
 # Dependencies first, so editing source does not reinstall them.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# setuptools comes with the base image, not with this project, and its version
+# there carries known advisories. Upgrading it costs nothing and stops a
+# dependency scanner from flagging an image we ship.
+RUN pip install --no-cache-dir --upgrade pip setuptools \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

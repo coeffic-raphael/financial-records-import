@@ -23,6 +23,13 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
 
+      # Known advisories against what we actually install. It fails the build
+      # rather than warning: an advisory nobody is forced to look at is an
+      # advisory nobody looks at. A new one landing on a transitive dependency
+      # will break an unrelated pull request, which is the intended cost.
+      - run: pip install pip-audit
+      - run: pip-audit --requirement requirements.txt --requirement requirements-dev.txt
+
   tests:
     name: Tests — Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
