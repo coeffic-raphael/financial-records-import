@@ -1,9 +1,11 @@
 """Provider construction: settings that must actually reach the SDK."""
 
 import json
+import re
 
 from app.providers.gemini import GeminiProvider
 from app.providers.schema import ExtractedField, json_schema
+from tests.conftest import BACKEND_ROOT
 
 
 class TestTimeoutIsApplied:
@@ -42,3 +44,36 @@ class TestConfidenceIsBounded:
 
         with pytest.raises(ValidationError):
             ExtractedField(value="x", confidence="very sure")
+
+
+class TestModelsArePinned:
+    """A floating alias would change extraction behaviour with no commit.
+
+    `gpt-5.6` resolves to `gpt-5.6-sol` today and may point elsewhere tomorrow.
+    The README states a measurement made against a specific build; if the
+    default drifts, that measurement stops describing what runs.
+    """
+
+    def test_the_openai_default_names_an_exact_build(self):
+        from app.config import Settings
+
+        model = Settings(jwt_secret="x" * 32, database_url="postgresql+psycopg://u@h/d").openai_model
+        assert re.search(r"-\d{4}-\d{2}-\d{2}$", model), (
+            f"OPENAI_MODEL default {model!r} is an alias, not a pinned build."
+        )
+
+    def test_the_documented_default_matches_the_code(self):
+        """§5 and .env.example both quote this value; drift makes one of them lie."""
+        from app.config import Settings
+
+        code_default = Settings(
+            jwt_secret="x" * 32, database_url="postgresql+psycopg://u@h/d"
+        ).openai_model
+        documented = {
+            line.split("=", 1)[1].strip()
+            for line in (BACKEND_ROOT / ".env.example").read_text().splitlines()
+            if line.startswith("OPENAI_MODEL=")
+        }
+        assert documented == {code_default}, (
+            f".env.example documents {documented} but the code default is {code_default!r}."
+        )

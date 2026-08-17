@@ -1,8 +1,13 @@
 """Deterministic provider for tests and offline development.
 
-It exists for three reasons: the test suite must never touch the network, the
-application must remain usable without an API key, and the fallback chain needs
-something to fall back to when no second real provider is configured.
+Two reasons, both real. The default test suite must never touch the network --
+it would be slow, billable, and dependent on what a model answers today. And
+the application must stay usable with no API key at all, which is what makes a
+clean clone runnable: the image ships with EXTRACTION_PROVIDER=mock.
+
+It is NOT a terminus of the fallback chain. `build_provider` never appends it:
+with a single real provider configured, that provider is returned alone, and a
+failure surfaces as a failure rather than as silently canned data.
 """
 
 from typing import Any

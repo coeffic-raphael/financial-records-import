@@ -55,18 +55,31 @@ class Settings(BaseSettings):
     # None of these may carry a VITE_ prefix: any VITE_* variable is compiled
     # into the browser bundle. Extraction is server-side only; the frontend
     # never learns which provider is used.
-    extraction_provider: str = "gemini"
+    extraction_provider: str = "openai"
     gemini_api_key: str = ""
     openai_api_key: str = ""
-    # Verified against the supplied documents. Newer flash models exist, but
-    # carry no free-tier quota on a personal key: every extraction comes back
-    # 429 and the feature looks broken rather than unfunded.
+    # The OpenAI model is PINNED to an exact build, not to a floating alias.
+    # "gpt-5.6" is an alias: it resolves to gpt-5.6-sol today and may point
+    # somewhere else tomorrow, which would change extraction behaviour with no
+    # code change and silently invalidate the measurement in the README.
+    #
+    # Gemini offers no dated build for this tier -- gemini-3.5-flash is the only
+    # name there is -- so the fallback cannot be pinned the same way, and its
+    # behaviour can shift under us. It is the fallback, not the primary, which
+    # is what makes that acceptable rather than merely unavoidable.
+    #
+    # gpt-5.4-mini was measured against gpt-5.6-sol on the supplied bank
+    # statement -- the hardest document in the set, a dense six-column table.
+    # Both read all eight rows correctly, twice, with every reference, amount,
+    # date and currency right. mini did it in 9-15 s against 26-27 s, and costs
+    # $0.0096 per statement against $0.0785: eight times less for the same
+    # result, so the expensive tier buys nothing measurable here.
     gemini_model: str = "gemini-3.5-flash"
-    openai_model: str = "gpt-5.6"
-    # Measured, not guessed: the supplied bank statement takes ~135 s to come
-    # back as eight records, where a one-record invoice takes ~25 s. A 60 s
-    # timeout aborted the statement every time -- the one document in the set
-    # that exercises multi-record extraction.
+    openai_model: str = "gpt-5.4-mini-2026-03-17"
+    # Sized for the SLOWEST provider in the chain, not the primary. The pinned
+    # OpenAI model answers the statement in 9-15 s, but Gemini has taken 140 s
+    # on the same document, and a timeout below that turns a slow fallback into
+    # a failed import.
     extraction_timeout_seconds: float = 180.0
     extraction_confidence_threshold: Decimal = Decimal("0.70")
 
