@@ -6,6 +6,9 @@ Imports, extracts, validates, corrects and approves financial records from **CSV
 and **PDF** sources. CSV rows and AI-extracted PDF content converge on a single
 normalized model.
 
+**▶ [Video Demo](https://youtu.be/3czXPVkFSBc)** — the application running,
+end to end.
+
 ---
 
 ## 1. Setup and run instructions
@@ -68,7 +71,7 @@ The backend suite needs a database, so start that one service first:
 ```bash
 docker compose up -d db
 
-cd backend  && make test              # 564 tests
+cd backend  && make test              # 575 tests
 cd frontend && npm ci && npm test     # 132 tests
 ```
 
@@ -613,7 +616,7 @@ require it (§3), but no invitation flow exists.
 | Status machine | `NEEDS_REVIEW` / `VALID` / `VALIDATED`, with correction always revalidating |
 | Backend API | The 10 required endpoints, plus jobs, source documents and a paginated record list |
 | Frontend | The 9 required screens: batch creation, upload, processing status, record list, filters, field-level errors, editing, revalidation, individual validation, batch summary |
-| Tests | 564 backend, 132 frontend |
+| Tests | 575 backend, 132 frontend |
 
 ### Bonus features — complete
 
@@ -637,7 +640,6 @@ correction**, because a statement leaves eight records needing the same value.
 | Renaming a batch | Delete and re-import is the only way |
 | Deleting or bulk-deleting a record | Deliberate: records are auditable artifacts. Batches are the unit of deletion |
 | Undoing a correction | Would need a history of replaced values, which does not exist |
-| A video walkthrough | To be linked here |
 
 ---
 
@@ -742,7 +744,7 @@ written with Claude Code: what to change, in what order, and what would count as
 done. Development then followed that plan rather than improvising, and each
 stage was reviewed by Codex once implemented.
 
-A large part of the test suite was generated with Claude Code: the 564 hermetic
+A large part of the test suite was generated with Claude Code: the 575 hermetic
 backend tests, the 12 live provider cases, and the 132 frontend tests.
 
 The plans live in `docs/plans/`, which is not committed.
