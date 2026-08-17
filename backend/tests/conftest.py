@@ -12,6 +12,7 @@ import csv
 import io
 import os
 import secrets
+import tempfile
 
 # The test suite runs in mock mode: it must never build a real provider, and the
 # startup check would otherwise refuse to boot without a key. Set before any
@@ -22,6 +23,18 @@ os.environ["EXTRACTION_PROVIDER"] = "mock"
 # secret scanner is right to flag and a reader has to think about.
 os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(32))
 os.environ.setdefault("COOKIE_SECURE", "false")
+# Uploaded documents must land somewhere disposable.
+#
+# The database is isolated by overriding the `get_session` dependency, so the
+# `database_url` in the settings is never consulted while handling a request.
+# The upload directory is not: the route reads `get_settings()` directly, which
+# no dependency override can reach. Without this line every test upload wrote a
+# real file into the repository's own `uploads/` -- 3 853 of them had piled up,
+# orphaned from any row, because a test only ever reads back the document it
+# just created and nothing enumerates the directory.
+os.environ.setdefault(
+    "UPLOAD_STORAGE_DIR", tempfile.mkdtemp(prefix="financial-records-test-uploads-")
+)
 from collections.abc import Iterator
 from pathlib import Path
 

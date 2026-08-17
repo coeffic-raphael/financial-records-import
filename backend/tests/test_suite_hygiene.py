@@ -1,9 +1,12 @@
-"""The default test run must never reach the network.
+"""The default test run must never reach the network -- nor the working tree.
 
 The README tells a reviewer to run `pytest`. Marking the live tests was not
 enough: a mark only enables selection, it does not deselect. With a key
 configured, a bare `pytest` was making real API calls -- slow, billable, and
 failing outright with no network.
+
+The second half is the same lesson applied to disk: the suite must not write
+into the repository either.
 """
 
 import ast
@@ -47,6 +50,44 @@ def _imported_modules(source: str) -> set[str]:
     return modules
 
 
+class TestTheSuiteWritesOutsideTheRepository:
+    """Uploaded documents must land somewhere disposable.
+
+    The database is isolated by overriding `get_session`, so the settings'
+    `database_url` is never consulted while a request is handled. The upload
+    directory is not: the route calls `get_settings()` directly, and no
+    dependency override can reach that. Nothing in the suite noticed, because a
+    test only ever reads back the document it just created -- 3 853 orphaned
+    files had accumulated in `backend/uploads/` before anyone counted them.
+
+    It matters more once Docker mounts that directory as a named volume: the
+    same behaviour stops being a messy folder and becomes a leak that survives
+    restarts.
+    """
+
+    def test_uploads_do_not_go_into_the_repository(self):
+        from app.config import get_settings
+
+        target = Path(get_settings().upload_storage_dir).resolve()
+        assert not target.is_relative_to(BACKEND_ROOT), (
+            f"tests would write uploaded documents into the repository at {target}"
+        )
+
+    def test_an_upload_really_lands_there(self, client, batch, sample_csv):
+        """Asserting on the setting alone would pass even if nothing used it."""
+        from app.config import get_settings
+        from tests.conftest import upload_csv
+
+        target = Path(get_settings().upload_storage_dir).resolve()
+        before = {path.name for path in target.iterdir()} if target.exists() else set()
+
+        upload_csv(client, batch["id"], sample_csv, "hygiene.csv")
+
+        assert {path.name for path in target.iterdir()} - before, (
+            "the upload wrote nothing where the setting points"
+        )
+
+
 def test_no_test_module_imports_a_provider_sdk():
     """A double is injected at the dependency; no test needs an SDK directly."""
     offenders = []
@@ -76,8 +117,9 @@ class TestStartupRefusesBadConfiguration:
         monkeypatch.setenv("OPENAI_API_KEY", "")
         get_settings.cache_clear()
 
-        with pytest.raises(ValueError, match="GEMINI_API_KEY is required"), TestClient(
-            create_app()
+        with (
+            pytest.raises(ValueError, match="GEMINI_API_KEY is required"),
+            TestClient(create_app()),
         ):
             pass
 
@@ -92,8 +134,9 @@ class TestStartupRefusesBadConfiguration:
         monkeypatch.setenv("EXTRACTION_PROVIDER", "not-a-provider")
         get_settings.cache_clear()
 
-        with pytest.raises(ValueError, match="Unknown EXTRACTION_PROVIDER"), TestClient(
-            create_app()
+        with (
+            pytest.raises(ValueError, match="Unknown EXTRACTION_PROVIDER"),
+            TestClient(create_app()),
         ):
             pass
 
