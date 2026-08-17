@@ -2,6 +2,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The real one: the component narrows on `instanceof`, so a local double
+// would silently never match.
+import { ApiError } from "../../lib/apiError";
+
 /**
  * One drop zone for two endpoints.
  *
@@ -14,11 +18,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const csvMutate = vi.fn();
 const pdfMutate = vi.fn();
-const idle = { isPending: false, isSuccess: false, isError: false, data: undefined, error: null };
+const idle = {
+  isPending: false,
+  isSuccess: false,
+  isError: false,
+  data: undefined,
+  error: null as unknown,
+  reset: vi.fn(),
+};
+const csvState = { ...idle };
+const pdfState = { ...idle };
 
 vi.mock("../../hooks/useApi", () => ({
-  useUploadCsv: () => ({ ...idle, mutate: csvMutate }),
-  useUploadPdfs: () => ({ ...idle, mutate: pdfMutate }),
+  useUploadCsv: () => ({ ...csvState, mutate: csvMutate }),
+  useUploadPdfs: () => ({ ...pdfState, mutate: pdfMutate }),
 }));
 
 const { UploadPanel } = await import("../UploadPanel");
@@ -36,6 +49,8 @@ function drop(...files: File[]) {
 beforeEach(() => {
   csvMutate.mockReset();
   pdfMutate.mockReset();
+  Object.assign(csvState, idle, { error: null });
+  Object.assign(pdfState, idle, { error: null });
 });
 afterEach(cleanup);
 
@@ -49,7 +64,7 @@ describe("routing a file to the endpoint it needs", () => {
   it("sends PDFs to extraction, in one call", () => {
     drop(file("a.pdf", "application/pdf"), file("b.pdf", "application/pdf"));
     expect(pdfMutate).toHaveBeenCalledTimes(1);
-    expect(pdfMutate.mock.calls[0][0]).toHaveLength(2);
+    expect(pdfMutate.mock.calls[0][0].files).toHaveLength(2);
     expect(csvMutate).not.toHaveBeenCalled();
   });
 
@@ -98,5 +113,43 @@ describe("what the zone tells the user", () => {
   it("says PDFs are read in the background", () => {
     render(<UploadPanel batchId="batch-1" />);
     expect(screen.getByText(/read by a model in the background/)).toBeTruthy();
+  });
+});
+
+
+describe("a document already in this batch", () => {
+  function refused() {
+    csvState.isError = true;
+    csvState.error = new ApiError(409, "DUPLICATE_DOCUMENT", "january.csv was already imported.");
+    drop(file("january.csv", "text/csv"));
+  }
+
+  it("asks rather than reporting and moving on", () => {
+    /* Importing the supplied CSV twice leaves 60 records, 42 needing review,
+       and the only way back is deleting the batch. Worth a question. */
+    refused();
+    expect(screen.getByText("Already imported")).toBeTruthy();
+    expect(screen.getByText(/january.csv was already imported/)).toBeTruthy();
+  });
+
+  it("says what importing it again would cost", () => {
+    refused();
+    expect(screen.getByText(/flagged as a duplicate reference/)).toBeTruthy();
+  });
+
+  it("sends the same file back with the answer", () => {
+    refused();
+    csvMutate.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Import it again" }));
+
+    expect(csvMutate).toHaveBeenCalledTimes(1);
+    expect(csvMutate.mock.calls[0][0].force).toBe(true);
+    expect(csvMutate.mock.calls[0][0].file.name).toBe("january.csv");
+  });
+
+  it("can be backed out of", () => {
+    refused();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(csvState.reset).toHaveBeenCalled();
   });
 });

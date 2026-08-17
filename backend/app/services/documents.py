@@ -85,6 +85,41 @@ def read_for_record(
     return document, path.read_bytes()
 
 
+def sha256_of(path: Path) -> str:
+    """Read a spooled upload in chunks: the point of spooling was not to hold
+    the whole file in memory, and hashing it in one read would undo that."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def refuse_duplicate(session: Session, batch: ImportBatch, spooled: Path) -> None:
+    """Stop a byte-identical document being imported into the same batch twice.
+
+    Scoped to the batch, like the index behind it. The same file legitimately
+    belongs in two different batches -- that is a second import, not a mistake.
+
+    Raises rather than skipping, so the caller decides. Importing the same file
+    twice is usually an accident and costs the reviewer real work: the supplied
+    CSV done twice leaves 60 records, 42 of them needing review, and the only
+    way back is deleting the whole batch.
+    """
+    existing = find_duplicate(session, batch, sha256_of(spooled))
+    if existing is None:
+        return
+    raise APIError(
+        status.HTTP_409_CONFLICT,
+        "DUPLICATE_DOCUMENT",
+        f"{existing.filename} was already imported into this batch.",
+        {
+            "document_name": existing.filename,
+            "uploaded_at": existing.created_at.isoformat(),
+        },
+    )
+
+
 def find_duplicate(
     session: Session, batch: ImportBatch, content_sha256: str
 ) -> SourceDocument | None:

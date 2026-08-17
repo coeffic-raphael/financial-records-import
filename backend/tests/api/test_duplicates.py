@@ -27,8 +27,16 @@ class TestAcrossUploads:
         same reference through twice, and the record would then disagree with
         itself the moment it was revalidated.
         """
+        # Two DIFFERENT files carrying the same reference, which is the real
+        # case: a re-export with a row changed. Byte-identical files are a
+        # different problem and the upload refuses those outright.
         upload_csv(client, batch["id"], make_csv([make_raw()]), "first.csv")
-        upload_csv(client, batch["id"], make_csv([make_raw()]), "second.csv")
+        upload_csv(
+            client,
+            batch["id"],
+            make_csv([make_raw(description="same reference, re-exported")]),
+            "second.csv",
+        )
 
         rows = _references(client, batch["id"])
         assert rows[0][1] == "VALID"

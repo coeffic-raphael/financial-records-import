@@ -35,7 +35,7 @@ from app.schemas import (
     RecordOut,
 )
 from app.services.csv_import import import_csv
-from app.services.documents import collect_stored_files, store
+from app.services.documents import collect_stored_files, refuse_duplicate, store
 from app.services.pdf_extraction import create_jobs, run_extraction
 from app.services.records import lock_batch_for_import
 from app.services.summary import build_summary
@@ -190,6 +190,11 @@ async def upload_csv(
     file: Annotated[UploadFile, File()],
     session: SessionDep,
     tenant: TenantDep,
+    force: bool = Query(
+        default=False,
+        description="Import a document already present in this batch. The client "
+        "asks the person first; the server never decides this on its own.",
+    ),
 ) -> ImportResult:
     batch = _get_batch(session, batch_id, tenant.id)
     settings = get_settings()
@@ -199,6 +204,10 @@ async def upload_csv(
     # open the file it came from.
     filename, spooled = await _spool_upload(file, settings.max_upload_bytes, "upload.csv", "csv")
     try:
+        # Before the lock and before any write: refusing after storing the
+        # document would leave the very row this check exists to prevent.
+        if not force:
+            refuse_duplicate(session, batch, spooled)
         # Before store(), not inside persist_records(). store() inserts a
         # source_document row whose foreign key makes PostgreSQL take a
         # FOR KEY SHARE lock on this batch; two imports would then each hold one
@@ -237,6 +246,11 @@ async def upload_pdfs(
     tenant: TenantDep,
     provider: Annotated[ExtractionProvider, Depends(get_extraction_provider)],
     session_factory: SessionFactoryDep,
+    force: bool = Query(
+        default=False,
+        description="Import a document already present in this batch. The client "
+        "asks the person first; the server never decides this on its own.",
+    ),
 ) -> ExtractionAccepted:
     """Accept one or more PDFs and answer immediately.
 
@@ -262,6 +276,18 @@ async def upload_pdfs(
         for _, path in spooled:
             path.unlink(missing_ok=True)
         raise
+
+    # Checked once every file is on disk and before any is stored, for the same
+    # reason the spooling is grouped: a duplicate in the third file must not
+    # leave the first two imported.
+    if not force:
+        try:
+            for _, path in spooled:
+                refuse_duplicate(session, batch, path)
+        except BaseException:
+            for _, path in spooled:
+                path.unlink(missing_ok=True)
+            raise
 
     documents = [
         store(

@@ -150,13 +150,15 @@ export function useCreateBatch() {
   });
 }
 
+/** `force` carries the answer to the duplicate warning, never a default. */
 export function useUploadCsv(batchId: string) {
   const invalidate = useInvalidateBatch(batchId);
   return useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, force = false }: { file: File; force?: boolean }) => {
       const form = new FormData();
       form.append("file", file);
-      return api.upload<ImportResult>(`/api/batches/${batchId}/uploads/csv`, form);
+      const query = force ? "?force=true" : "";
+      return api.upload<ImportResult>(`/api/batches/${batchId}/uploads/csv${query}`, form);
     },
     onSuccess: invalidate,
   });
@@ -165,10 +167,14 @@ export function useUploadCsv(batchId: string) {
 export function useUploadPdfs(batchId: string) {
   const invalidate = useInvalidateBatch(batchId);
   return useMutation({
-    mutationFn: (files: File[]) => {
+    mutationFn: ({ files, force = false }: { files: File[]; force?: boolean }) => {
       const form = new FormData();
       files.forEach((file) => form.append("files", file));
-      return api.upload<{ jobs: ExtractionJob[] }>(`/api/batches/${batchId}/uploads/pdf`, form);
+      const query = force ? "?force=true" : "";
+      return api.upload<{ jobs: ExtractionJob[] }>(
+        `/api/batches/${batchId}/uploads/pdf${query}`,
+        form,
+      );
     },
     onSuccess: invalidate,
   });
