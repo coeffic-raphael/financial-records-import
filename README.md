@@ -182,6 +182,56 @@ Two consequences this design is built for:
   correction is merged into the stored raw payload and revalidated through the
   identical code, so the import path and the correction path cannot drift apart.
 
+### Where a rule lives
+
+The backend is split by *what a thing decides*, not by framework convention.
+
+| | |
+|---|---|
+| `app/domain/` | The rules themselves: normalization, validation, the enums the data dictionary fixes. No database, no HTTP. |
+| `app/services/` | Orchestration and transactions: import, extraction, correction, summary. |
+| `app/api/` | HTTP only — request shape, status codes, and the tenant resolved from the token. |
+| `app/providers/` | One interface, three implementations. Swapping the model is configuration, never a code change. |
+
+One rule inside that split is worth naming, because getting it wrong is the
+usual source of half-written data: **mutation and transaction are separate**.
+`correct_in_transaction` changes a record and does not commit;
+`apply_correction` and `apply_corrections` commit exactly once. A bulk edit of
+two hundred records is therefore one transaction that either lands whole or not
+at all, and the single-record path reuses the same function rather than a copy.
+
+### Why PostgreSQL, and why nothing lighter
+
+Not a preference: an import must be able to run while another one is running on
+the same batch, and `SELECT … FOR UPDATE` is what makes that correct. Seven code
+paths take that row lock before reading, so two concurrent imports cannot both
+believe they own the same sequence number. SQLite has no equivalent, which is
+why it was removed rather than kept as a convenience for local runs — one engine
+in development and another in production is a class of bug nobody sees until
+deployment.
+
+### Frontend state: two stores, on purpose
+
+**Server state belongs to TanStack Query. Session state belongs to Zustand.
+Nothing else lives in the store.**
+
+The store has **no `persist` middleware**, and that is a security decision
+rather than an omission: `persist` writes to `localStorage`, which would undo
+the "access token in memory only" choice in a single import and reopen the XSS
+exposure the rest of the design avoids.
+
+**Query keys are prefixed with the user id** — `["u", userId, …]`. The cache is
+the one leak vector between two people sharing a machine that the server cannot
+close by itself, so a collision between two users is made structurally
+impossible, and signing out clears the cache on top of that. It is the same
+concern as the tenant isolation below, handled at the other end of the wire.
+
+Every mutation names what it invalidates rather than refetching everything, and
+one invalidation exists because of a bug: polling told the UI when extraction
+*finished*, but nothing told the records table or the summary, so both kept
+showing the state from before the upload until the user navigated away and
+back — which is precisely what hid the problem during a manual check.
+
 ### Isolation is on the tenant, not the user
 
 Registration creates one account and one workspace, so in practice every user
