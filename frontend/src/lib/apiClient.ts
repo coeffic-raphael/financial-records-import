@@ -157,6 +157,7 @@ export const api = {
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body }),
   upload: <T>(path: string, formData: FormData) => request<T>(path, { method: "POST", formData }),
+  del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
 /** Test seam: resets the shared refresh promise between cases. */

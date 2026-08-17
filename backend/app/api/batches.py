@@ -35,7 +35,7 @@ from app.schemas import (
     RecordOut,
 )
 from app.services.csv_import import import_csv
-from app.services.documents import store
+from app.services.documents import collect_stored_files, store
 from app.services.pdf_extraction import create_jobs, run_extraction
 from app.services.records import lock_batch_for_import
 from app.services.summary import build_summary
@@ -144,6 +144,35 @@ def list_batches(session: SessionDep, tenant: TenantDep) -> list[ImportBatch]:
             .order_by(ImportBatch.created_at.desc())
         )
     )
+
+
+@router.delete("/{batch_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_batch(batch_id: str, session: SessionDep, tenant: TenantDep) -> None:
+    """Delete a batch and everything it holds.
+
+    The obvious recovery from uploading the wrong file, and the only one: there
+    is no other way to undo an import.
+
+    Deliberately NOT refused on a batch holding approved records. That guard
+    would be defensible -- approving is a human act and deleting erases it --
+    but nothing un-approves a record, so it would create batches that can never
+    be removed. The interface states what is about to be destroyed instead,
+    which puts the fact where the decision is made.
+    """
+    batch = _get_batch(session, batch_id, tenant.id)
+    settings = get_settings()
+
+    # Read the paths first: the rows are about to cascade away with the batch.
+    paths = collect_stored_files(session, batch.id, settings.upload_storage_dir)
+
+    session.delete(batch)
+    session.commit()
+
+    # After the commit, never before. A failure here leaves files with no rows,
+    # which is untidy; the reverse leaves rows pointing at files that are gone,
+    # which is the broken "open the source document" button.
+    for path in paths:
+        path.unlink(missing_ok=True)
 
 
 @router.get("/{batch_id}", response_model=BatchOut)

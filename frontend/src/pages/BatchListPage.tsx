@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Button, EmptyState, ErrorNotice, Panel, Spinner, TextInput } from "../components/ui";
+import { DeleteBatchButton } from "../components/DeleteBatchButton";
 import { useBatches, useCreateBatch } from "../hooks/useApi";
 
 export function BatchListPage() {
@@ -48,16 +49,22 @@ export function BatchListPage() {
         {batches.data && batches.data.length > 0 && (
           <ul className="-m-4 divide-y divide-slate-100">
             {batches.data.map((batch) => (
-              <li key={batch.id}>
+              <li
+                key={batch.id}
+                className="flex items-center gap-3 pr-4 transition hover:bg-slate-50"
+              >
+                {/* The link keeps the row; the delete control sits outside it,
+                    or every click aimed at Delete would open the batch. */}
                 <Link
                   to={`/batches/${batch.id}`}
-                  className="flex items-center justify-between px-4 py-3 transition hover:bg-slate-50"
+                  className="flex flex-1 items-center justify-between px-4 py-3"
                 >
                   <span className="text-sm font-medium text-slate-800">{batch.name}</span>
                   <span className="text-xs tabular-nums text-slate-400">
                     {new Date(batch.created_at).toLocaleString()}
                   </span>
                 </Link>
+                <DeleteBatchButton batch={batch} />
               </li>
             ))}
           </ul>

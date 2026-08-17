@@ -95,3 +95,24 @@ def find_duplicate(
             SourceDocument.content_sha256 == content_sha256,
         )
     )
+
+
+def collect_stored_files(session: Session, batch_id: str, root: str) -> list[Path]:
+    """The paths of every file belonging to a batch.
+
+    The database cascades: dropping the batch row takes its records, jobs and
+    source_document rows with it. Files on disk are outside that guarantee, and
+    nothing else would ever look at them again -- so they have to be collected
+    here or they leak for good.
+
+    Read the paths BEFORE the rows disappear, delete them AFTER the transaction
+    commits: a failed delete then leaves files with no rows, which is untidy,
+    where the reverse leaves rows pointing at nothing, which is a broken button.
+    """
+    paths = [
+        storage_path(root, document_id)
+        for document_id in session.scalars(
+            select(SourceDocument.id).where(SourceDocument.batch_id == batch_id)
+        )
+    ]
+    return paths

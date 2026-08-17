@@ -77,11 +77,24 @@ export function useRecord(recordId: string) {
   });
 }
 
-export function useSummary(batchId: string) {
+export function useSummary(batchId: string, enabled = true) {
   const userId = useUserId();
   return useQuery({
     queryKey: scopedKey(userId, "batch", batchId, "summary"),
     queryFn: () => api.get<BatchSummary>(`/api/batches/${batchId}/summary`),
+    // Off until asked for: the delete confirmation needs one batch's counts,
+    // and fetching them for every row of the list to serve a rare click would
+    // be a request per batch on every visit.
+    enabled,
+  });
+}
+
+export function useDeleteBatch() {
+  const client = useQueryClient();
+  const userId = useUserId();
+  return useMutation({
+    mutationFn: (batchId: string) => api.del<void>(`/api/batches/${batchId}`),
+    onSuccess: () => client.invalidateQueries({ queryKey: scopedKey(userId, "batches") }),
   });
 }
 
