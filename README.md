@@ -33,9 +33,16 @@ That is the whole command. From a **clean clone, with no `.env` and no API key**
 
 Two choices make the first run credential-free: in debug the application
 **generates a signing secret** at startup, and extraction falls back to a
-**mock provider** returning canned records. The whole workflow — import,
-validate, correct, approve — is exercisable without an account anywhere.
-Section 2 explains what to add for real AI extraction.
+**mock provider**, which makes no network call. The CSV half of the workflow —
+import, validate, correct, approve, including every validation rule — is
+therefore fully exercisable with nothing configured at all.
+
+**PDF extraction needs a real API key**, and is the part of this project worth
+looking at. Without one, uploading a PDF completes and yields **no records**:
+that is the mock doing its job, not a failure. Section 2 says where to get a
+key and section 5 explains which model runs and why — it is one variable and a
+restart. The [video walkthrough](https://youtu.be/3czXPVkFSBc) shows the real
+extraction end to end if you would rather not configure anything.
 
 Your data survives a restart: the database and the uploaded documents live on
 named volumes, so `docker compose down` then `up` finds your batches intact.
