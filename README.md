@@ -71,9 +71,14 @@ The backend suite needs a database, so start that one service first:
 ```bash
 docker compose up -d db
 
-cd backend  && make test              # 575 tests
-cd frontend && npm ci && npm test     # 132 tests
+cd backend  && make install && make test   # 575 tests
+cd frontend && npm ci      && npm test     # 132 tests
 ```
+
+`make install` creates `backend/.venv` and installs both requirement files; it
+is needed once, on a fresh clone. The database is created by
+`docker compose up -d db` alone — the image's init script adds the separate
+`_test` database the suite is allowed to empty.
 
 `make test` supplies the two database URLs itself. They are written in the
 Makefile rather than defaulted in the code, because the suite **empties every
