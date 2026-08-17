@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from app.api import auth, batches, records
 from app.api.errors import register_error_handlers
 from app.config import get_settings
+from app.logging_setup import configure_logging
 from app.providers.registry import build_provider
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings.log_level)
     app = FastAPI(
         lifespan=lifespan,
         title="Financial Records Import",

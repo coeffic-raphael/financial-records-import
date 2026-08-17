@@ -78,7 +78,7 @@ The backend suite needs a database, so start that one service first:
 ```bash
 docker compose up -d db
 
-cd backend  && make install && make test   # 575 tests
+cd backend  && make install && make test   # 579 tests
 cd frontend && npm ci      && npm test     # 132 tests
 ```
 
@@ -129,7 +129,27 @@ templates with every variable documented and every secret **left empty**.
 
 ```bash
 cp backend/.env.example backend/.env
-docker compose up -d --force-recreate api    # picked up on restart
+```
+
+**Copying it is not enough.** The template ships `EXTRACTION_PROVIDER=mock` and
+empty keys, so a copy followed by a restart changes nothing — uploads keep
+returning no records. Open the file and set two values:
+
+```bash
+EXTRACTION_PROVIDER=openai      # openai | gemini | mock
+OPENAI_API_KEY=sk-...           # the table below says where to get one
+```
+
+Then restart the API, which reads the file when the container starts:
+
+```bash
+docker compose up -d --force-recreate api
+```
+
+It confirms what it picked in its own logs:
+
+```
+INFO:     app.main - Extraction provider ready: openai
 ```
 
 ### How to obtain each one
@@ -145,7 +165,7 @@ docker compose up -d --force-recreate api    # picked up on restart
 
 | Variable | Needed when | Without it |
 |---|---|---|
-| `EXTRACTION_PROVIDER` | you want real PDF extraction | Defaults to `mock`; the workflow still runs end to end |
+| `EXTRACTION_PROVIDER` | you want real PDF extraction | Defaults to `mock`: CSV import runs end to end, PDF uploads succeed and return **no records** |
 | `OPENAI_API_KEY` | `EXTRACTION_PROVIDER=openai` | The application **refuses to start**, rather than failing on someone's first upload |
 | `GEMINI_API_KEY` | `EXTRACTION_PROVIDER=gemini`, or as the fallback link of the chain | Same |
 | `JWT_SECRET` | anywhere but local debug | In debug an ephemeral one is generated, which invalidates open sessions on every restart — that is why it is a local mode and not a deployment |
@@ -645,7 +665,7 @@ require it (§3), but no invitation flow exists.
 | Status machine | `NEEDS_REVIEW` / `VALID` / `VALIDATED`, with correction always revalidating |
 | Backend API | The 10 required endpoints, plus jobs, source documents and a paginated record list |
 | Frontend | The 9 required screens: batch creation, upload, processing status, record list, filters, field-level errors, editing, revalidation, individual validation, batch summary |
-| Tests | 575 backend, 132 frontend |
+| Tests | 579 backend, 132 frontend |
 
 ### Bonus features — complete
 
@@ -773,7 +793,7 @@ written with Claude Code: what to change, in what order, and what would count as
 done. Development then followed that plan rather than improvising, and each
 stage was reviewed by Codex once implemented.
 
-A large part of the test suite was generated with Claude Code: the 575 hermetic
+A large part of the test suite was generated with Claude Code: the 579 hermetic
 backend tests, the 12 live provider cases, and the 132 frontend tests.
 
 The plans live in `docs/plans/`, which is not committed.

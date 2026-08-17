@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     # a failed import.
     extraction_timeout_seconds: float = 180.0
     extraction_confidence_threshold: Decimal = Decimal("0.70")
+    # Applied to the `app` namespace at startup. Without it the application's
+    # own INFO lines -- including one per extraction, with provider, model,
+    # record count and duration -- never reach the console.
+    log_level: str = "INFO"
 
     # The thread pool would happily run dozens of extractions at once, but free
     # provider quotas are counted in requests per minute. The slowest component
