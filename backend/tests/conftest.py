@@ -12,6 +12,7 @@ import csv
 import io
 import os
 import secrets
+import shutil
 import tempfile
 
 # The test suite runs in mock mode: it must never build a real provider, and the
@@ -32,8 +33,11 @@ os.environ.setdefault("COOKIE_SECURE", "false")
 # real file into the repository's own `uploads/` -- 3 853 of them had piled up,
 # orphaned from any row, because a test only ever reads back the document it
 # just created and nothing enumerates the directory.
-os.environ.setdefault(
-    "UPLOAD_STORAGE_DIR", tempfile.mkdtemp(prefix="financial-records-test-uploads-")
+# `or` short-circuits, so a directory is only created when nothing supplied one:
+# a path the caller chose is theirs, and stays untouched. Binding a module-level
+# name here would put every import below in breach of E402, hence the shape.
+os.environ["UPLOAD_STORAGE_DIR"] = os.environ.get("UPLOAD_STORAGE_DIR") or tempfile.mkdtemp(
+    prefix="financial-records-test-uploads-"
 )
 from collections.abc import Iterator
 from pathlib import Path
@@ -58,6 +62,9 @@ from app.models import (
 )
 from app.services.pdf_extraction import reset_semaphore
 from tests.factories import VALID_RAW
+
+UPLOAD_DIR_PREFIX = "financial-records-test-uploads-"
+TEST_UPLOAD_DIR = Path(os.environ["UPLOAD_STORAGE_DIR"])
 
 BACKEND_ROOT = Path(__file__).parents[1]
 SAMPLES = BACKEND_ROOT.parent / "samples"
@@ -231,3 +238,14 @@ def make_csv(rows: list[dict], columns: list[str] | None = None) -> bytes:
     for row in rows:
         writer.writerow({name: row.get(name, "") for name in fieldnames})
     return buffer.getvalue().encode("utf-8")
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Take the temporary upload directory with us.
+
+    Redirecting the uploads out of the repository fixed the pollution there but
+    moved it: without this, every run leaves a directory behind in the system
+    temp folder.
+    """
+    if TEST_UPLOAD_DIR.name.startswith(UPLOAD_DIR_PREFIX):
+        shutil.rmtree(TEST_UPLOAD_DIR, ignore_errors=True)
