@@ -670,33 +670,19 @@ Deliberately out of scope here, with the approach that would be taken:
   security headers.
 
 ---
-
 ## 10. AI tools used
 
-This project was built with **Claude Code** used as a working tool throughout:
-planning, writing code and tests, reviewing, and drafting this README. Every
-plan was reviewed by **Codex**, which found real defects each time — a sequence
-counter that reserved one position for an import consuming eight, a deadlock
-from promoting a lock already held, a migration calling SQLite's `INSTR` that
-could never have run on PostgreSQL, and an approval path that could mark a
-record `VALIDATED` while it still carried validation errors.
+**Claude Code** was used as a development assistant, and **Codex** was used for
+code review.
 
-The method mattered more than the tool. Two rules were applied without
-exception:
+Before each development stage, a markdown plan of the steps to follow was
+written with Claude Code: what to change, in what order, and what would count as
+done. Development then followed that plan rather than improvising, and each
+stage was reviewed by Codex once implemented.
 
-**Reproduce before fixing.** Every defect was demonstrated first — by running
-it, not by reading the code. That is how the concurrent-import race, the
-extraction variability and the stale-bundle problem were each confirmed to be
-what they appeared to be.
+A large part of the test suite was generated with Claude Code: the 564 hermetic
+backend tests, the 11 live provider cases, and the 132 frontend tests.
 
-**Sabotage after fixing.** Every fix was then deliberately broken again to check
-that the new test failed. This caught three tests that proved nothing: one that
-hung instead of failing, one that passed with both the right and the wrong
-implementation, and one that would have passed whatever happened because it
-queried the wrong session.
-
-`docs/plans/` is not committed. It holds the working plans, written in French
-before each stage; the repository itself is entirely in English.
+The plans live in `docs/plans/`, which is not committed.
 
 ---
-
