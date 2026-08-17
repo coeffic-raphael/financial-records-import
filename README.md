@@ -261,6 +261,23 @@ existing workspace, and registration always creates a new one. Adding an
 organisation would mean an invitation flow and roles, not a data model change —
 the part that usually forces a migration is already there.
 
+### What CI is for here
+
+Five jobs run on every push, and each exists because something can break in a
+way a local run would not show.
+
+| | |
+|---|---|
+| **Lint** | `ruff` on the backend, `npm run lint` on the frontend. The frontend linter came with the template and had never been run; the same standard now applies on both sides. |
+| **Tests on three Python versions** | 3.11, 3.12 and 3.13. A suite that passes only on the interpreter its author happened to have is a suite that says less than it seems. |
+| **Migrations match the models** | Upgrade from an empty database, then `alembic check` for undeclared model drift, then **downgrade to empty and back up**. Reversibility is the part nobody tests until they need it at the worst moment. |
+| **Frontend types, tests and build** | The build runs `tsc` first, so a type error fails here instead of surviving because the dev server transpiles without checking. |
+| **Secret scanning** | `gitleaks` over the **whole history** — `fetch-depth: 0`, not just the last commit. A key removed in a later commit is still a leaked key. |
+
+The backend jobs run against a real **PostgreSQL 17** service container rather
+than a substitute, for the reason the engine was chosen in the first place: row
+locking and migration behaviour are exactly what a lighter stand-in gets wrong.
+
 ---
 
 ## 4. Data model
